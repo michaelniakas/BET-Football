@@ -1,0 +1,50 @@
+# Paper-trading cycle: settle finished matches, log the new fixtures, report.
+# Commits the updated ledgers in model/paper/ back to the repo, which the
+# Streamlit "Paper Trading" page reads.
+name: paper-trading
+
+on:
+  schedule:
+    - cron: "0 7 * * 2,5"   # Tue + Fri 07:00 UTC (fresh fixtures/odds; results of the weekend / midweek)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: paper-trading
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Past seasons never change; keep them between runs (the running season is re-downloaded anyway).
+      - uses: actions/cache@v4
+        with:
+          path: model/data
+          key: football-data-${{ github.run_id }}
+          restore-keys: football-data-
+
+      - name: Run paper trading
+        run: |
+          echo "===== $(date -u '+%Y-%m-%d %H:%M') UTC =====" >> model/paper/weekly.log
+          python -m model.paper weekly 2>&1 | tee -a model/paper/weekly.log
+
+      - name: Commit ledgers
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add model/paper
+          git diff --cached --quiet || git commit -m "paper trading: $(date -u '+%Y-%m-%d')"
+          git push
