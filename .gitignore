@@ -1,0 +1,3 @@
+# API keys (The Odds API, Anthropic) — never commit; on Streamlit Cloud use App settings → Secrets
+.streamlit/secrets.toml
+__pycache__/

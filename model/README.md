@@ -97,6 +97,15 @@ Ledgers: `model/paper/ledger_ou25.csv`, `ledger_1x2.csv`. Log του προγρ�
 ROI / CLV των settled picks, διαβάζοντας τα ledgers. Deploy: share.streamlit.io → New app → repo `BET-Football`,
 branch `main`, main file `app.py`. Μετά από κάθε run του workflow το app δείχνει τα νέα ledgers.
 
+Η σελίδα **Optimizer** (`pages/2_Optimizer.py`, λογική στα `optimizer.py` και `live_odds.py`) παίρνει ένα ποσό και
+το μοιράζει σε τρία σενάρια: μονά, σύστημα 2/4 και παρολί 3 & 4, με βάρη ανάλογα του Kelly κάθε κουπονιού.
+Για κάθε σενάριο δείχνει αναμενόμενο κέρδος κατά το μοντέλο **και** κατά την αγορά, P(κέρδος), P(χάνεις όλο το ποσό)
+και κατανομή από 20.000 προσομοιώσεις.
+
+Live αποδόσεις: The Odds API (δωρεάν κλειδί, 500 credits/μήνα, 2 credits ανά λίγκα). Τοπικά βάλε το κλειδί στο
+`.streamlit/secrets.toml` ως `ODDS_API_KEY = "..."` (είναι στο `.gitignore`), στο Streamlit Cloud στα Secrets.
+Χωρίς κλειδί χρησιμοποιείται το snapshot του football-data από το τελευταίο run.
+
 Ρεαλιστικός ρυθμός: στο backtest το O/U με edge > 6% βγάζει ~13 picks/σεζόν (2 στο Σεπ–Οκτ 2026). Το CLV σε όλα τα
 όρια (που μετριέται σε ~120 αγώνες/εβδομάδα) θα δώσει σήμα πολύ νωρίτερα από το ROI των picks.
 
