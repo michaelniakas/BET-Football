@@ -1,9 +1,18 @@
-﻿FROM python:3.11-slim
-WORKDIR /app
+﻿FROM python:3.11-slim@sha256:673719e071ecf27434fd2635bbd8d00f49f4fdd81f243143438a42ced8bedf60 AS build
+RUN python -m venv /venv
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN /venv/bin/pip install --no-cache-dir -r requirements.txt
+
+FROM python:3.11-slim@sha256:673719e071ecf27434fd2635bbd8d00f49f4fdd81f243143438a42ced8bedf60
+ENV PATH=/venv/bin:$PATH PYTHONUNBUFFERED=1
+COPY --from=build /venv /venv
+RUN useradd --uid 10001 --no-create-home app
+WORKDIR /app
 COPY app.py .
 COPY pages/ pages/
 COPY model/ model/
+USER app
 EXPOSE 7860
-CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.headless=true"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/_stcore/health', timeout=4)"
+CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.headless=true", "--browser.gatherUsageStats=false"]

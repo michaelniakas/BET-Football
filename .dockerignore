@@ -1,0 +1,9 @@
+*
+!requirements.txt
+!app.py
+!pages/
+!model/
+model/data/
+model/output/
+**/__pycache__/
+**/*.pyc
