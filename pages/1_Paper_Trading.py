@@ -12,6 +12,7 @@ import streamlit as st
 
 from model import backtest
 from model.data import MARKETS
+from model.features import odds_cols
 from model.paper import STRATEGIES, read_ledger
 
 st.set_page_config(page_title="Paper Trading", page_icon="📒", layout="wide")
@@ -28,6 +29,22 @@ def load(name: str) -> pd.DataFrame:
         if not df.empty and c not in df:
             df[c] = np.nan
     return df
+
+
+def all_predictions(df: pd.DataFrame, market: str, book: str) -> pd.DataFrame:
+    """Model vs market probability for every outcome, plus the outcome with the largest edge at `book` odds."""
+    spec = MARKETS[market]
+    out = df[["date", "league", "home", "away"]].copy()
+    for o, s in zip(spec["outcomes"], spec["suffixes"]):
+        out[f"Μοντέλο {o}"] = df[f"p_{o}"]
+        out[f"Αγορά {o}"] = df[f"mkt_{s}"]
+    probs = df[[f"p_{o}" for o in spec["outcomes"]]].to_numpy()
+    edges = probs * df[odds_cols(book, market)].to_numpy(dtype=float) - 1
+    priced = ~np.isnan(edges).all(axis=1)
+    best = np.where(priced, np.nanargmax(np.where(np.isnan(edges), -np.inf, edges), axis=1), 0)
+    out["Καλύτερο"] = np.where(priced, np.array(spec["outcomes"])[best], None)
+    out["Edge"] = np.where(priced, edges[np.arange(len(df)), best], np.nan)
+    return out.sort_values(["date", "Edge"], ascending=[True, False])
 
 
 def cumulative_chart(bets: pd.DataFrame) -> go.Figure:
@@ -76,6 +93,24 @@ for tab, name in zip(st.tabs([LABELS[n] for n in STRATEGIES]), STRATEGIES):
                                         "odds": st.column_config.NumberColumn(format="%.2f"),
                                         "p_model": st.column_config.NumberColumn("P μοντέλου", format="%.3f"),
                                         "edge": st.column_config.NumberColumn(format="percent")})
+
+        st.subheader("Όλες οι προβλέψεις")
+        if upcoming.empty:
+            st.write("Δεν υπάρχουν επερχόμενοι αγώνες στο ledger.")
+        else:
+            preds = all_predictions(upcoming, market, book)
+            leagues = st.multiselect("Λίγκες", sorted(preds.league.unique()), key=f"leagues_{name}",
+                                     placeholder="Όλες")
+            if leagues:
+                preds = preds[preds.league.isin(leagues)]
+            prob_cols = [c for c in preds if c.startswith(("Μοντέλο", "Αγορά"))]
+            st.caption("Πιθανότητα μοντέλου δίπλα στη no-vig πιθανότητα της αγοράς. "
+                       "Edge = πιθανότητα μοντέλου × απόδοση − 1, για το αποτέλεσμα με το μεγαλύτερο edge.")
+            st.dataframe(
+                preds, hide_index=True, width="stretch",
+                column_config={"date": st.column_config.DateColumn("Ημερομηνία"),
+                               "Edge": st.column_config.NumberColumn(format="percent"),
+                               **{c: st.column_config.NumberColumn(format="percent") for c in prob_cols}})
 
         st.subheader("Αποτελέσματα")
         if settled.empty:
