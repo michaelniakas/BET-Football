@@ -1,0 +1,44 @@
+# Gate for PRs and main: every Streamlit page must run headless without an
+# exception, and the image must build. Toft deploys main on push regardless,
+# so changes should go through a PR for this to protect production.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  pages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # same as the Dockerfile
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run every page headless
+        run: |
+          python - <<'EOF'
+          import glob, sys
+          from streamlit.testing.v1 import AppTest
+          failed = False
+          for f in ["app.py", *sorted(glob.glob("pages/*.py"))]:
+              at = AppTest.from_file(f, default_timeout=60).run()
+              errors = [e.value for e in at.exception]
+              print(f, "OK" if not errors else errors)
+              failed |= bool(errors)
+          sys.exit(failed)
+          EOF
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t bet-app:ci .
