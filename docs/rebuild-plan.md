@@ -86,5 +86,6 @@ health path `/health` and the `ODDS_API_KEY` secret. Rollback: point the service
 - Understat blocks GitHub runners. Mitigated 2026-11-05 (main `1329dea`): the job uses cached xG and keeps going;
   the paper strategies don't use xG. A model that needs fresh xG needs another source or a non-GitHub runner.
 - Ledgers ship inside the image: after each Tue/Fri run the app shows the new ledgers only after a deploy (Streamlit
-  Cloud redeployed on push). Until phase 3: deploy after the runs, or read the ledgers from GitHub at runtime.
+  Cloud redeployed on push). Decided 2026-11-05: until phase 3 the app reads them from GitHub `main` at runtime
+  (`api/ledgers.py` `GithubLedgers`, 10 min cache, image copy as fallback); phase 3 deletes it.
 - Rebuilding Michalis's pages means new model work must be exposed through the API, not a new Streamlit page.
