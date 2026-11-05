@@ -171,6 +171,11 @@ def test_optimize_snapshot(client):
     assert r["live"] is None and r["upcoming_matches"] == 64 and 0 < len(r["legs"]) <= 8
     assert [l["edge"] for l in r["legs"]] == sorted((l["edge"] for l in r["legs"]), reverse=True)
     assert len({(l["date"], l["home"]) for l in r["legs"]}) == len(r["legs"])        # one leg per match
+
+    legs = client.post("/api/v1/optimize", json={**SNAPSHOT, "min_edge": 0.005}).json()["legs"]
+    assert legs
+    for l in legs:                                        # min_odds: the price at which edge == min_edge
+        assert l["min_odds"] == pytest.approx(1.005 / l["p_model"]) and l["odds"] >= l["min_odds"]
     for sc in r["scenarios"]:
         assert sc["summary"]["staked"] <= 50 + 1e-9
         assert sum(sc["pnl_histogram"]["probabilities"]) == pytest.approx(1)

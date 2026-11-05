@@ -287,8 +287,9 @@ def optimize(ledgers: Ledgers, odds: LiveOdds, budget: float, markets: list[str]
     if legs.empty:
         return result
 
-    result["legs"] = legs[MATCH_KEY + ["market", "outcome", "odds", "bookmaker", "p_model", "p_market", "edge"]] \
-        .to_dict("records")
+    legs = legs.assign(min_odds=(1 + min_edge) / legs.p_model)
+    result["legs"] = legs[MATCH_KEY + ["market", "outcome", "odds", "bookmaker", "p_model", "p_market", "edge",
+                                       "min_odds"]].to_dict("records")
     for sid, sc in opt.scenarios(len(legs)).items():
         coupons = opt.build_coupons(legs, sc["combos"], budget)
         if coupons.empty:

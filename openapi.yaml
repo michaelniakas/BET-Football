@@ -781,7 +781,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/MatchRef"
         - type: object
-          required: [market, outcome, odds, bookmaker, p_model, p_market, edge]
+          required: [market, outcome, odds, bookmaker, p_model, p_market, edge, min_odds]
           properties:
             market: { $ref: "#/components/schemas/Market" }
             outcome: { $ref: "#/components/schemas/Outcome" }
@@ -792,6 +792,11 @@ components:
             p_model: { type: number, minimum: 0, maximum: 1 }
             p_market: { type: number, minimum: 0, maximum: 1 }
             edge: { type: number }
+            min_odds:
+              type: number
+              description: >-
+                Lowest odds at which this selection still meets the request's `min_edge`:
+                `(1 + min_edge) / p_model`. Bet at these odds or better, at any bookmaker.
 
     Scenario:
       type: object

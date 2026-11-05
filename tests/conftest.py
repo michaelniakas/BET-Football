@@ -29,10 +29,15 @@ CONTRACT = OpenAPI.from_path(ROOT / "openapi.yaml",
                                  "application/problem+json": json.loads, "application/yaml": bytes.decode}))
 
 
+# How far fixture dates move so that ANCHOR becomes today. Fixed once per session, so a run across midnight
+# shifts the ledgers and the recorded golden outputs alike.
+SHIFT = pd.Timestamp.today().normalize() - ANCHOR
+
+
 @pytest.fixture(scope="session")
 def ledger_dir(tmp_path_factory) -> Path:
     """The fixture ledgers with every date moved so that ANCHOR becomes today."""
-    shift = pd.Timestamp.today().normalize() - ANCHOR
+    shift = SHIFT
     out = tmp_path_factory.mktemp("ledgers")
     for f in FIXTURES.glob("ledger_*.csv"):
         df = pd.read_csv(f, parse_dates=["date", "logged_at"])

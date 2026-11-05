@@ -327,6 +327,12 @@ class Leg(MatchRef):
     p_model: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
     p_market: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
     edge: StrictFloat
+    min_odds: Annotated[
+        StrictFloat,
+        Field(
+            description="Lowest odds at which this selection still meets the request's `min_edge`: `(1 + min_edge) / p_model`. Bet at these odds or better, at any bookmaker."
+        ),
+    ]
 
 
 class System(BaseModel):
