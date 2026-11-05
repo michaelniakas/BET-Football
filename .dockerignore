@@ -1,7 +1,7 @@
 *
 !requirements.txt
-!app.py
-!pages/
+!openapi.yaml
+!api/
 !model/
 model/data/
 model/output/

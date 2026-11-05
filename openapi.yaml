@@ -1,0 +1,856 @@
+openapi: 3.1.0
+info:
+  title: BET-Football API
+  version: 1.0.0
+  description: |
+    Paper-trading results and the coupon optimizer, served over the model in `model/`.
+    This file is the source of truth: Pydantic models and the TypeScript client are generated from it.
+
+    ## Conventions
+
+    - **Units.** Probabilities, edges, ROI, CLV and rates are fractions (`0.052` = 5.2%), never percent.
+      Odds are decimal. Money is EUR.
+    - **Dates.** `date` fields are match days (`YYYY-MM-DD`). "Upcoming" means `date >= today` in the
+      server's timezone (UTC). Timestamps are RFC 3339.
+    - **Outcomes.** 1X2: `H`, `D`, `A`. Over/Under 2.5: `O`, `U`. Display labels are the client's job.
+    - **Collections** (picks, predictions, settled bets) are paginated with `limit` / `offset` and return
+      `{items, total, limit, offset}`. Sorting is `sort=field,-field` (`-` = descending), allowed fields
+      enumerated per endpoint; the match key (date, league, home, away) is always the final tie-breaker so
+      pages are stable. Equality filters are repeatable query parameters named after the field
+      (`league=E0&league=SP1`).
+    - **Reports** with a fixed, small size (catalog, summary, edge sweep, probability report, optimize)
+      return an object with bounded arrays and are not paginated.
+    - **Errors** are RFC 9457 problem details (`application/problem+json`). `code` is the stable,
+      machine-readable identifier; `title` and `detail` are for humans and may change. Clients must
+      treat an unknown `code` as a generic failure of its HTTP status.
+
+    ## Versioning
+
+    The major version is in the path (`/api/v1`). Within v1 only additive changes ship: new endpoints,
+    new optional request fields, new response fields, new `code` values. Anything else is `/api/v2`,
+    served alongside v1; v1 responses then carry `Deprecation` and `Sunset` headers and v1 is removed
+    no earlier than the release after the bundled frontend has moved to v2.
+servers:
+  - url: /
+# No authentication in the app: access is restricted at the platform (Toft access control).
+security: []
+tags:
+  - name: meta
+    description: Health and the reference data the UI builds its controls from.
+  - name: paper-trading
+    description: The paper-trading ledgers, upcoming picks and the results of settled ones.
+  - name: optimizer
+    description: Coupon scenarios for this week's selections, with snapshot or live odds.
+
+paths:
+  /health:
+    get:
+      tags: [meta]
+      operationId: getHealth
+      summary: Liveness probe for the platform.
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /api/v1/openapi.yaml:
+    get:
+      tags: [meta]
+      operationId: getContract
+      summary: This document.
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/v1/catalog:
+    get:
+      tags: [meta]
+      operationId: getCatalog
+      summary: Strategies, leagues, books and live-odds availability. Everything the UI needs to build its controls.
+      responses:
+        "200":
+          description: Catalog.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Catalog" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/v1/strategies/{strategy}/picks:
+    get:
+      tags: [paper-trading]
+      operationId: listPicks
+      summary: Upcoming, unsettled fixtures whose best outcome clears `min_edge` at `book` odds.
+      description: At most one pick per match (the outcome with the largest edge, odds ≤ 10). Stake is 1 unit flat.
+      parameters:
+        - $ref: "#/components/parameters/Strategy"
+        - $ref: "#/components/parameters/Book"
+        - $ref: "#/components/parameters/MinEdge"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: sort
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            uniqueItems: true
+            items: { enum: [date, -date, league, -league, odds, -odds, edge, -edge] }
+            default: [date]
+      responses:
+        "200":
+          description: Page of picks.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PickPage" }
+        "404": { $ref: "#/components/responses/StrategyNotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/v1/strategies/{strategy}/predictions:
+    get:
+      tags: [paper-trading]
+      operationId: listPredictions
+      summary: Every upcoming fixture, model probability next to the no-vig market probability per outcome.
+      parameters:
+        - $ref: "#/components/parameters/Strategy"
+        - $ref: "#/components/parameters/Book"
+        - $ref: "#/components/parameters/League"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: sort
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            uniqueItems: true
+            items: { enum: [date, -date, league, -league, edge, -edge] }
+            default: [date, -edge]
+      responses:
+        "200":
+          description: Page of predictions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PredictionPage" }
+        "404": { $ref: "#/components/responses/StrategyNotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/v1/strategies/{strategy}/results/summary:
+    get:
+      tags: [paper-trading]
+      operationId: getResultsSummary
+      summary: Metrics of the settled picks at `min_edge` / `book`, plus the cumulative profit and CLV series.
+      parameters:
+        - $ref: "#/components/parameters/Strategy"
+        - $ref: "#/components/parameters/Book"
+        - $ref: "#/components/parameters/MinEdge"
+      responses:
+        "200":
+          description: Summary. `metrics` is null when no settled match clears the threshold.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResultsSummary" }
+        "404": { $ref: "#/components/responses/StrategyNotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/v1/strategies/{strategy}/results/bets:
+    get:
+      tags: [paper-trading]
+      operationId: listSettledBets
+      summary: The settled picks behind the summary.
+      parameters:
+        - $ref: "#/components/parameters/Strategy"
+        - $ref: "#/components/parameters/Book"
+        - $ref: "#/components/parameters/MinEdge"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: sort
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            uniqueItems: true
+            items: { enum: [date, -date, edge, -edge, profit, -profit, clv, -clv] }
+            default: [-date]
+      responses:
+        "200":
+          description: Page of settled bets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettledBetPage" }
+        "404": { $ref: "#/components/responses/StrategyNotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/v1/strategies/{strategy}/results/edge-sweep:
+    get:
+      tags: [paper-trading]
+      operationId: getEdgeSweep
+      summary: The same metrics at fixed edge thresholds 0, 2, 4, 6, 8, 10, 15%. Thresholds with no bets are omitted.
+      parameters:
+        - $ref: "#/components/parameters/Strategy"
+        - $ref: "#/components/parameters/Book"
+      responses:
+        "200":
+          description: Edge sweep.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EdgeSweep" }
+        "404": { $ref: "#/components/responses/StrategyNotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/v1/strategies/{strategy}/results/probability-report:
+    get:
+      tags: [paper-trading]
+      operationId: getProbabilityReport
+      summary: Log loss and Brier score of the model vs the pre-match and closing market, on the same settled matches.
+      parameters:
+        - $ref: "#/components/parameters/Strategy"
+      responses:
+        "200":
+          description: One row per probability source. Scores are null when `n` is 0.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProbabilityReport" }
+        "404": { $ref: "#/components/responses/StrategyNotFound" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/v1/optimize:
+    post:
+      tags: [optimizer]
+      operationId: optimize
+      summary: Split a budget across this week's selections in three scenarios and simulate them.
+      description: |
+        Picks the best selection per match (never 1X2 and O/U of the same match), ranks by edge, keeps the
+        top 8, then builds singles (top 6), a 2-from-N system (N = min(legs, 4)) and accumulators of 3 and 4.
+        Stakes follow each coupon's Kelly fraction (equal split if none is +EV), floored to 0.10 EUR.
+        Risk figures come from 20,000 simulated rounds with the model's probabilities (fixed seed: the same
+        request gives the same numbers). A scenario with no coupons is omitted.
+
+        With live odds, the server keeps one cached Odds API response per league and refetches a league
+        only when its copy is older than `catalog.live_odds.ttl_seconds` (2 credits per league). Concurrent
+        requests for the same league share one fetch. If a fetch fails the request fails; leagues fetched
+        before the failure stay cached.
+
+        POST although it changes no resource: the request is too structured for a query string.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OptimizeRequest" }
+      responses:
+        "200":
+          description: |
+            Legs and scenarios. `legs` is empty when nothing passes the filters; `upcoming_matches` tells the
+            client whether that is because there are no upcoming fixtures at all.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OptimizeResponse" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "502": { $ref: "#/components/responses/OddsApiFailed" }
+        "503": { $ref: "#/components/responses/OddsApiNotConfigured" }
+        default: { $ref: "#/components/responses/Problem" }
+
+components:
+  parameters:
+    Strategy:
+      name: strategy
+      in: path
+      required: true
+      description: Unknown values return 404 `strategy_not_found`.
+      schema: { $ref: "#/components/schemas/StrategyId" }
+    Book:
+      name: book
+      in: query
+      schema: { $ref: "#/components/schemas/Book" }
+    MinEdge:
+      name: min_edge
+      in: query
+      description: Minimum edge (model probability × odds − 1). Defaults to the strategy's `default_min_edge`.
+      schema:
+        type: number
+        minimum: 0
+        maximum: 0.5
+    League:
+      name: league
+      in: query
+      style: form
+      explode: true
+      description: Keep only these leagues. Omitted = all. Duplicates are ignored.
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/League" }
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+  responses:
+    Problem:
+      description: Any other error, e.g. `internal_error` (never carries internal messages or stack traces), `not_found` and `method_not_allowed` for unknown routes.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    ValidationFailed:
+      description: "`validation_failed`: a parameter or body field is invalid; see `errors`."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    StrategyNotFound:
+      description: "`strategy_not_found`."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    OddsApiFailed:
+      description: |
+        The Odds API call failed. `odds_api_quota_exhausted` (credits used up), `odds_api_unauthorized`
+        (the server's key was rejected), `odds_api_unavailable` (network error or unexpected upstream status).
+        The upstream message is not passed through.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    OddsApiNotConfigured:
+      description: "`odds_api_not_configured`: live odds were requested but the server has no Odds API key."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: "`/problems/{code}`. Not dereferenceable."
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        code: { $ref: "#/components/schemas/ErrorCode" }
+        errors:
+          type: array
+          description: Present for `validation_failed`.
+          items:
+            type: object
+            required: [detail]
+            properties:
+              detail: { type: string }
+              pointer:
+                type: string
+                description: JSON Pointer into the request body.
+              parameter:
+                type: string
+                description: Name of the offending query or path parameter.
+
+    ErrorCode:
+      enum:
+        - validation_failed
+        - not_found
+        - method_not_allowed
+        - strategy_not_found
+        - odds_api_not_configured
+        - odds_api_quota_exhausted
+        - odds_api_unauthorized
+        - odds_api_unavailable
+        - internal_error
+
+    StrategyId:
+      enum: [ou25, 1x2]
+    Market:
+      enum: [1x2, ou25]
+    Outcome:
+      enum: [H, D, A, O, U]
+    League:
+      enum: [E0, E1, D1, D2, I1, I2, SP1, SP2, F1, F2, N1, P1, B1, T1, G1, SC0]
+    Book:
+      description: Ledger odds source. `avg` market average, `max` best price, `b365` Bet365, `ps` Pinnacle.
+      enum: [avg, max, b365, ps]
+      default: avg
+    SnapshotBook:
+      description: Ledger odds sources the optimizer accepts.
+      enum: [avg, max, b365]
+
+    Page:
+      type: object
+      required: [total, limit, offset]
+      properties:
+        total: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1 }
+        offset: { type: integer, minimum: 0 }
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          const: ok
+
+    PickPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/Pick" }
+
+    PredictionPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/Prediction" }
+
+    SettledBetPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/SettledBet" }
+
+    EdgeSweep:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          maxItems: 7
+          items: { $ref: "#/components/schemas/EdgeSweepRow" }
+
+    EdgeSweepRow:
+      allOf:
+        - type: object
+          required: [min_edge]
+          properties:
+            min_edge: { type: number }
+        - $ref: "#/components/schemas/Metrics"
+
+    ProbabilityReport:
+      type: object
+      required: [n, rows]
+      properties:
+        n:
+          type: integer
+          minimum: 0
+          description: Settled matches with model, pre-match and closing probabilities all present.
+        rows:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [source, log_loss, brier]
+            properties:
+              source: { enum: [model, market_pre_match, market_closing] }
+              log_loss: { type: [number, "null"] }
+              brier: { type: [number, "null"] }
+
+    Catalog:
+      type: object
+      required: [strategies, leagues, snapshot_books, live_odds]
+      properties:
+        strategies:
+          type: array
+          items: { $ref: "#/components/schemas/Strategy" }
+        leagues:
+          type: array
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { $ref: "#/components/schemas/League" }
+              name: { type: string, examples: [England Premier League] }
+        snapshot_books:
+          type: array
+          description: Odds sources the optimizer accepts with `source = snapshot`.
+          items: { $ref: "#/components/schemas/SnapshotBook" }
+        live_odds:
+          type: object
+          required: [configured, ttl_seconds]
+          properties:
+            configured:
+              type: boolean
+              description: The server has an Odds API key. When false, only snapshot odds are available.
+            ttl_seconds:
+              type: integer
+              minimum: 1
+              description: How long a league's live odds are reused before the next optimize refetches them.
+
+    Strategy:
+      type: object
+      required: [id, market, leagues, books, default_min_edge, ledger]
+      properties:
+        id: { $ref: "#/components/schemas/StrategyId" }
+        market: { $ref: "#/components/schemas/Market" }
+        leagues:
+          type: array
+          items: { $ref: "#/components/schemas/League" }
+        books:
+          type: array
+          description: Books with odds in this ledger, i.e. the useful values of `book` for this strategy.
+          items: { $ref: "#/components/schemas/Book" }
+        default_min_edge: { type: number, examples: [0.06] }
+        ledger:
+          type: object
+          required: [matches, last_logged_at]
+          properties:
+            matches:
+              type: integer
+              minimum: 0
+            last_logged_at:
+              type: [string, "null"]
+              format: date-time
+              description: Null when the ledger is empty.
+
+    MatchRef:
+      type: object
+      required: [date, league, home, away]
+      properties:
+        date: { type: string, format: date }
+        league: { $ref: "#/components/schemas/League" }
+        home: { type: string }
+        away: { type: string }
+
+    Pick:
+      allOf:
+        - $ref: "#/components/schemas/MatchRef"
+        - type: object
+          required: [pick, odds, p_model, edge]
+          properties:
+            pick: { $ref: "#/components/schemas/Outcome" }
+            odds: { type: number, exclusiveMinimum: 1 }
+            p_model: { type: number, minimum: 0, maximum: 1 }
+            edge: { type: number }
+
+    SettledBet:
+      allOf:
+        - $ref: "#/components/schemas/Pick"
+        - type: object
+          required: [result, stake, profit, p_close, clv]
+          properties:
+            result: { $ref: "#/components/schemas/Outcome" }
+            stake: { type: number, description: Units. Always 1 (flat staking). }
+            profit: { type: number, description: Units. }
+            p_close:
+              type: [number, "null"]
+              description: No-vig closing probability of the picked outcome. Null when no closing odds were found.
+            clv:
+              type: [number, "null"]
+              description: Closing-line value, odds × p_close − 1.
+
+    Prediction:
+      allOf:
+        - $ref: "#/components/schemas/MatchRef"
+        - type: object
+          required: [outcomes, best]
+          properties:
+            outcomes:
+              type: array
+              minItems: 2
+              maxItems: 3
+              items:
+                type: object
+                required: [outcome, p_model, p_market]
+                properties:
+                  outcome: { $ref: "#/components/schemas/Outcome" }
+                  p_model: { type: number, minimum: 0, maximum: 1 }
+                  p_market:
+                    type: number
+                    minimum: 0
+                    maximum: 1
+                    description: No-vig pre-match market probability.
+            best:
+              description: The outcome with the largest edge at `book` odds. Null when `book` has no odds for the match.
+              oneOf:
+                - type: "null"
+                - type: object
+                  required: [outcome, edge]
+                  properties:
+                    outcome: { $ref: "#/components/schemas/Outcome" }
+                    edge: { type: number }
+
+    Metrics:
+      type: object
+      required: [bets, staked, profit, roi, roi_se, avg_odds, hit_rate, clv, beat_close_rate]
+      properties:
+        bets: { type: integer, minimum: 1 }
+        staked: { type: number }
+        profit: { type: number, description: Units. }
+        roi: { type: number }
+        roi_se:
+          type: [number, "null"]
+          description: One standard error of ROI. Null with a single bet.
+        avg_odds: { type: number }
+        hit_rate: { type: number, minimum: 0, maximum: 1 }
+        clv:
+          type: [number, "null"]
+          description: Mean CLV over bets with closing odds. Null when none have them.
+        beat_close_rate:
+          type: [number, "null"]
+          description: Share of bets with CLV > 0, among bets with closing odds.
+
+    ResultsSummary:
+      type: object
+      required: [settled_matches, metrics, series]
+      properties:
+        settled_matches:
+          type: integer
+          minimum: 0
+          description: Settled matches in the ledger, before the edge threshold.
+        metrics:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/Metrics"
+        series:
+          type: array
+          description: One point per settled bet in date order, for the cumulative chart.
+          items:
+            type: object
+            required: [date, cumulative_profit, mean_clv]
+            properties:
+              date: { type: string, format: date }
+              cumulative_profit: { type: number }
+              mean_clv:
+                type: [number, "null"]
+                description: Running mean of CLV up to this bet, ignoring bets without closing odds.
+
+    LiveOddsInfo:
+      type: object
+      required: [quota, leagues, bookmakers]
+      properties:
+        quota:
+          description: Credits reported by The Odds API on the last call. Null if this process has not called it yet.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [remaining, used]
+              properties:
+                remaining: { type: integer }
+                used: { type: integer }
+        leagues:
+          type: array
+          description: The requested leagues and how fresh their odds are.
+          items:
+            type: object
+            required: [league, fetched_at, events, matched, unmatched]
+            properties:
+              league: { $ref: "#/components/schemas/League" }
+              fetched_at: { type: string, format: date-time }
+              events: { type: integer, minimum: 0 }
+              matched:
+                type: integer
+                minimum: 0
+                description: Events matched to a fixture the model has scored. `matched + len(unmatched) = events`.
+              unmatched:
+                type: array
+                description: Events with odds but no model prediction.
+                items:
+                  type: object
+                  required: [kickoff, home, away]
+                  properties:
+                    kickoff: { type: string, format: date-time }
+                    home: { type: string }
+                    away: { type: string }
+        bookmakers:
+          type: array
+          description: |
+            Every bookmaker with prices for matches the model has scored in the requested leagues, sorted,
+            regardless of the `bookmakers` filter. The client builds its bookmaker picker from this.
+          items: { type: string }
+
+    OptimizeRequest:
+      type: object
+      required: [budget, markets, odds]
+      additionalProperties: false
+      properties:
+        budget:
+          type: number
+          minimum: 5
+          maximum: 100000
+          description: EUR.
+        markets:
+          type: array
+          minItems: 1
+          description: Duplicates are ignored.
+          items: { $ref: "#/components/schemas/Market" }
+        min_prob:
+          type: number
+          minimum: 0.2
+          maximum: 0.8
+          default: 0.35
+          description: Minimum model probability per selection.
+        min_edge:
+          type: number
+          minimum: -0.1
+          maximum: 0.15
+          default: 0
+        odds:
+          oneOf:
+            - $ref: "#/components/schemas/SnapshotOdds"
+            - $ref: "#/components/schemas/LiveOdds"
+          discriminator:
+            propertyName: source
+            mapping:
+              snapshot: "#/components/schemas/SnapshotOdds"
+              live: "#/components/schemas/LiveOdds"
+
+    SnapshotOdds:
+      type: object
+      required: [source, book]
+      additionalProperties: false
+      properties:
+        source: { const: snapshot }
+        book: { $ref: "#/components/schemas/SnapshotBook" }
+
+    LiveOdds:
+      type: object
+      required: [source, leagues]
+      additionalProperties: false
+      description: Live odds from The Odds API for these leagues; only matches with live prices are considered.
+      properties:
+        source: { const: live }
+        leagues:
+          type: array
+          minItems: 1
+          description: |
+            Duplicates are ignored. Leagues that none of the selected markets' strategies cover are ignored
+            too, and cost no credits.
+          items: { $ref: "#/components/schemas/League" }
+        bookmakers:
+          type: array
+          minItems: 1
+          description: |
+            Bookmakers you can bet with; each selection takes the best price among them. Omitted = all.
+            Duplicates are ignored.
+          items: { type: string }
+
+    OptimizeResponse:
+      type: object
+      required: [upcoming_matches, simulations, live, legs, scenarios]
+      properties:
+        live:
+          description: Live odds used for this request. Null with snapshot odds.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/LiveOddsInfo"
+        upcoming_matches:
+          type: integer
+          minimum: 0
+          description: Upcoming fixtures in the selected markets' ledgers, before any filter.
+        simulations: { const: 20000 }
+        legs:
+          type: array
+          maxItems: 8
+          description: Ranked by edge. Coupons refer to legs by index.
+          items: { $ref: "#/components/schemas/Leg" }
+        scenarios:
+          type: array
+          maxItems: 3
+          items: { $ref: "#/components/schemas/Scenario" }
+
+    Leg:
+      allOf:
+        - $ref: "#/components/schemas/MatchRef"
+        - type: object
+          required: [market, outcome, odds, bookmaker, p_model, p_market, edge]
+          properties:
+            market: { $ref: "#/components/schemas/Market" }
+            outcome: { $ref: "#/components/schemas/Outcome" }
+            odds: { type: number, exclusiveMinimum: 1.01 }
+            bookmaker:
+              type: string
+              description: Where the price is available. `football-data ({book})` for snapshot odds.
+            p_model: { type: number, minimum: 0, maximum: 1 }
+            p_market: { type: number, minimum: 0, maximum: 1 }
+            edge: { type: number }
+
+    Scenario:
+      type: object
+      required: [id, kind, system, summary, coupons, pnl_histogram]
+      properties:
+        id: { enum: [conservative, balanced, aggressive] }
+        kind: { enum: [singles, system, accumulators] }
+        system:
+          description: For `kind = system`, the "2 from N" sizes. Null otherwise.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [pick, of]
+              properties:
+                pick: { const: 2 }
+                of: { type: integer, minimum: 2, maximum: 4 }
+        summary:
+          type: object
+          required: [staked, expected_profit_model, expected_profit_market, p_profit, p_lose_all, median_pnl, p95_pnl, max_profit]
+          description: EUR unless a probability.
+          properties:
+            staked: { type: number }
+            expected_profit_model: { type: number }
+            expected_profit_market: { type: number }
+            p_profit: { type: number, minimum: 0, maximum: 1 }
+            p_lose_all: { type: number, minimum: 0, maximum: 1 }
+            median_pnl: { type: number }
+            p95_pnl: { type: number }
+            max_profit: { type: number, description: Profit if every coupon wins. }
+        coupons:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [legs, odds, p_model, p_market, ev_model, ev_market, stake, payout]
+            properties:
+              legs:
+                type: array
+                minItems: 1
+                items: { type: integer, minimum: 0, maximum: 7 }
+              odds: { type: number }
+              p_model: { type: number }
+              p_market: { type: number }
+              ev_model: { type: number }
+              ev_market: { type: number }
+              stake: { type: number, description: "EUR, multiple of 0.10." }
+              payout: { type: number, description: EUR returned if the coupon wins. }
+        pnl_histogram:
+          type: object
+          required: [bin_edges, probabilities]
+          description: Distribution of the simulated profit/loss, 60 equal-width bins.
+          properties:
+            bin_edges:
+              type: array
+              minItems: 61
+              maxItems: 61
+              items: { type: number }
+            probabilities:
+              type: array
+              minItems: 60
+              maxItems: 60
+              items: { type: number, minimum: 0, maximum: 1 }

@@ -1,8 +1,7 @@
-streamlit==1.66.1
-anthropic==2.5.0
+fastapi==0.162.0
+pydantic==2.14.2              # api/contract.py is generated for this version's behaviour
+uvicorn==0.54.0
 requests==2.34.2
 pandas==3.1.1
 numpy==2.4.6
 scikit-learn==1.9.1
-plotly==7.1.0
-python-dateutil==4.0.0

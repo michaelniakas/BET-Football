@@ -6,10 +6,11 @@ RUN useradd --uid 10001 --no-create-home app
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-# .dockerignore allowlists the app files, so this copies only app.py, pages/ and model/.
+# .dockerignore allowlists the app files, so this copies only api/, model/ and openapi.yaml.
 COPY . .
 USER app
 EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/_stcore/health', timeout=4)"
-CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.headless=true", "--browser.gatherUsageStats=false"]
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=4)"
+# One process; request concurrency comes from FastAPI's threadpool (the handlers are sync).
+CMD ["uvicorn", "--factory", "api.main:from_env", "--host", "0.0.0.0", "--port", "7860"]
