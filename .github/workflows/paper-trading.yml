@@ -38,10 +38,13 @@ jobs:
 
       - name: Run paper trading
         run: |
+          set -o pipefail
           echo "===== $(date -u '+%Y-%m-%d %H:%M') UTC =====" >> model/paper/weekly.log
           python -m model.paper weekly 2>&1 | tee -a model/paper/weekly.log
 
       - name: Commit ledgers
+        # Also after a failed run: commit what the other strategy settled/logged, plus weekly.log.
+        if: ${{ !cancelled() }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"

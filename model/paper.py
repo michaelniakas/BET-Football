@@ -11,6 +11,8 @@ edge threshold. The first snapshot of a fixture is kept: that is the price we wo
 from __future__ import annotations
 
 import argparse
+import sys
+import traceback
 
 import pandas as pd
 
@@ -131,13 +133,20 @@ def main() -> None:
 
     pd.set_option("display.width", 160, "display.max_columns", 20, "display.float_format", "{:.3f}".format)
     names = list(STRATEGIES) if args.strategy == "all" else [args.strategy]
+    failed = []
     for name in names:
-        if args.command in ("settle", "weekly"):
-            settle(name)
-        if args.command in ("log", "weekly"):
-            log(name)
-        if args.command in ("report", "weekly"):
-            report(name, args.book, args.edge)
+        try:
+            if args.command in ("settle", "weekly"):
+                settle(name)
+            if args.command in ("log", "weekly"):
+                log(name)
+            if args.command in ("report", "weekly"):
+                report(name, args.book, args.edge)
+        except Exception:  # one strategy's crash must not stop the others from settling/logging
+            traceback.print_exc()
+            failed.append(name)
+    if failed:
+        sys.exit(f"failed: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
