@@ -1,7 +1,7 @@
 """Use cases: what the two screens show and compute, on top of `model/`.
 
-Each function mirrors the Streamlit page it replaces (pages/1_Paper_Trading.py, pages/2_Optimizer.py)
-so the numbers stay identical; tests/test_golden.py holds them to that. Results are plain Python
+Each function mirrors the Streamlit page it replaced (pages/1_Paper_Trading.py, pages/2_Optimizer.py,
+now in git history) so the numbers stay identical; tests/test_golden.py holds them to that. Results are plain Python
 structures with the contract's field names; NaN means "no value" and becomes null at the edge.
 """
 from __future__ import annotations

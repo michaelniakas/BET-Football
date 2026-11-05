@@ -93,17 +93,19 @@ Ledgers: `model/paper/ledger_ou25.csv`, `ledger_1x2.csv`. Log του προγρ�
 
 ## App
 
-`streamlit run app.py` · η σελίδα **Paper Trading** (`pages/1_Paper_Trading.py`) δείχνει τα επερχόμενα picks και
-ROI / CLV των settled picks, διαβάζοντας τα ledgers. Deploy: share.streamlit.io → New app → repo `BET-Football`,
-branch `main`, main file `app.py`. Μετά από κάθε run του workflow το app δείχνει τα νέα ledgers.
+FastAPI (`api/`, συμβόλαιο στο `openapi.yaml`) + React (`web/`), ένα container. Τοπικά:
+`uvicorn --factory api.main:from_env --port 8000` και σε δεύτερο τερματικό `cd web && npm ci && npm run dev`.
+Deploy: το Toft χτίζει το `Dockerfile` από το GitHub. Μετά από κάθε run του workflow το app δείχνει τα νέα ledgers
+(στο επόμενο deploy, μέχρι τη φάση 3 του `docs/rebuild-plan.md`).
 
-Η σελίδα **Optimizer** (`pages/2_Optimizer.py`, λογική στα `optimizer.py` και `live_odds.py`) παίρνει ένα ποσό και
+Η σελίδα **Paper trading** δείχνει τα επερχόμενα picks και ROI / CLV των settled picks, διαβάζοντας τα ledgers.
+Η σελίδα **Optimizer** (λογική στα `optimizer.py` και `live_odds.py`) παίρνει ένα ποσό και
 το μοιράζει σε τρία σενάρια: μονά, σύστημα 2/4 και παρολί 3 & 4, με βάρη ανάλογα του Kelly κάθε κουπονιού.
 Για κάθε σενάριο δείχνει αναμενόμενο κέρδος κατά το μοντέλο **και** κατά την αγορά, P(κέρδος), P(χάνεις όλο το ποσό)
-και κατανομή από 20.000 προσομοιώσεις.
+και κατανομή από 20.000 προσομοιώσεις. Κάθε επιλογή έχει και «ελάχ. απόδοση»: παίξε μόνο σε αυτή ή καλύτερη.
 
-Live αποδόσεις: The Odds API (δωρεάν κλειδί, 500 credits/μήνα, 2 credits ανά λίγκα). Τοπικά βάλε το κλειδί στο
-`.streamlit/secrets.toml` ως `ODDS_API_KEY = "..."` (είναι στο `.gitignore`), στο Streamlit Cloud στα Secrets.
+Live αποδόσεις: The Odds API (δωρεάν κλειδί, 500 credits/μήνα, 2 credits ανά λίγκα). Το κλειδί είναι μόνο στον
+server, ως μεταβλητή περιβάλλοντος `ODDS_API_KEY` (secret στο Toft, ποτέ στο repo).
 Χωρίς κλειδί χρησιμοποιείται το snapshot του football-data από το τελευταίο run.
 
 Ρεαλιστικός ρυθμός: στο backtest το O/U με edge > 6% βγάζει ~13 picks/σεζόν (2 στο Σεπ–Οκτ 2026). Το CLV σε όλα τα

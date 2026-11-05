@@ -4,7 +4,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 import requests
+from fastapi.testclient import TestClient
 
+from api.ledgers import CsvLedgers
+from api.main import create_app
+from api.odds import LiveOddsCache
 from api.usecases import SWEEP_EDGES
 from tests.conftest import FakeOddsHttp, FakeResponse, odds_events
 
@@ -55,6 +59,20 @@ def test_unknown_route_and_method(client):
     r = client.post("/api/v1/catalog")
     problem(r, 405, "method_not_allowed")
     assert r.headers["allow"] == "GET"
+
+
+def test_serves_frontend_build(tmp_path, ledger_dir):
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><title>x</title>")
+    (tmp_path / "assets" / "index-abc.js").write_text("console.log(1)")
+    web = TestClient(create_app(CsvLedgers(ledger_dir), LiveOddsCache(""), web=tmp_path))   # "/" is not in the contract
+
+    r = web.get("/")
+    assert r.status_code == 200 and r.text.startswith("<!doctype html>") and r.headers["cache-control"] == "no-cache"
+    assert web.get("/assets/index-abc.js").text == "console.log(1)"
+    assert web.get("/assets/missing.js").status_code == 404
+    problem(web.get("/api/v1/nope"), 404, "not_found")                   # the API keeps its own 404s
+    assert web.get("/api/v1/catalog").status_code == 200
 
 
 def test_internal_error_does_not_leak(make_client):

@@ -1,6 +1,7 @@
 # Paper-trading cycle: settle finished matches, log the new fixtures, report.
 # Commits the updated ledgers in model/paper/ back to the repo, which the
-# Streamlit "Paper Trading" page reads.
+# app serves (api/). The ledgers ship inside the image, so the app shows them after the next
+# deploy; phase 3 moves them to Postgres.
 name: paper-trading
 
 on:

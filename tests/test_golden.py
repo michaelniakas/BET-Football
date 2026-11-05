@@ -1,47 +1,33 @@
 """Accuracy: the API returns exactly the numbers the Streamlit pages showed, on the same ledgers.
 
-The reference is what the pages themselves rendered (run headless with Streamlit's AppTest), not a
-re-implementation, so a bug shared by the API and a copy of the page logic cannot pass. The pages'
-outputs are frozen in tests/fixtures/golden_*.json, dates relative to ANCHOR.
-
-    RECORD_GOLDEN=1 pytest tests/test_golden.py   # re-run the pages and rewrite the JSON (needs pages/)
+The reference is what Michalis's Streamlit pages rendered on the fixture ledgers (run headless with
+AppTest), not a re-implementation, so a bug shared by the API and a copy of the page logic cannot pass.
+The pages are gone; their outputs are frozen in tests/fixtures/golden_*.json, dates relative to ANCHOR.
+To re-record (e.g. after changing the fixture ledgers), check out b627d25 ("Phase 2 prep: ..."), the last
+commit with pages/ and the recorder, and run RECORD_GOLDEN=1 pytest tests/test_golden.py there.
 """
 from __future__ import annotations
 
-import base64
 import json
-import os
 
 import numpy as np
 import pandas as pd
 import pytest
 
-import model.paper
 from model.optimizer import PICK_LABELS, scenarios
 from model.paper import STRATEGIES
 from api.usecases import RISK_FIELDS
-from tests.conftest import FIXTURES, ROOT, SHIFT
+from tests.conftest import FIXTURES, SHIFT
 
 KEY = ["date", "league", "home", "away"]
 ATOL = 1e-12
-RECORD = os.environ.get("RECORD_GOLDEN") == "1"
 
 
 # --------------------------------------------------------------------------- recorded page outputs
 
-def _undate(values, sign: int) -> list[str]:
-    """Dates moved between today's frame (sign -1: to ANCHOR's, for storing) and back (sign +1)."""
-    return [d.isoformat() for d in pd.to_datetime(list(values)) + sign * SHIFT]
-
-
-def encode_df(df: pd.DataFrame | None) -> dict | None:
-    if df is None:
-        return None
-    df = df.copy()
-    if "date" in df:
-        df["date"] = _undate(df["date"], -1)
-    split = df.to_dict("split")
-    return json.loads(json.dumps(split, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
+def _undate(values) -> list[str]:
+    """Recorded dates (relative to ANCHOR) moved to today's frame, like the fixture ledgers."""
+    return [d.isoformat() for d in pd.to_datetime(list(values)) + SHIFT]
 
 
 def decode_df(d: dict | None) -> pd.DataFrame | None:
@@ -49,51 +35,13 @@ def decode_df(d: dict | None) -> pd.DataFrame | None:
         return None
     df = pd.DataFrame(d["data"], index=d["index"], columns=d["columns"])
     if "date" in df:
-        df["date"] = pd.to_datetime(_undate(df["date"], +1))
+        df["date"] = pd.to_datetime(_undate(df["date"]))
     return df
 
 
-class Golden:
-    """One JSON file of page outputs per page, keyed by test case."""
-
-    def __init__(self, page: str):
-        self.path = FIXTURES / f"golden_{page}.json"
-
-    def save(self, case: str, value) -> None:
-        data = json.loads(self.path.read_text()) if self.path.exists() else {}
-        data[case] = value
-        self.path.write_text(json.dumps(data, sort_keys=True, ensure_ascii=False))
-
-    def load(self, case: str):
-        return json.loads(self.path.read_text())[case]
-
-
-def run(page: str, setup):
-    from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file(str(ROOT / "pages" / page), default_timeout=120).run()
-    setup(at)
-    at.run()
-    assert not at.exception, [e.value for e in at.exception]
-    return at
-
-
-def table(block, has: str, lacks: str = "") -> pd.DataFrame | None:
-    """The one table in `block` with column `has` (and without column `lacks`), or None."""
-    found = [d.value for d in block.dataframe if has in d.value.columns and lacks not in d.value.columns]
-    assert len(found) <= 1
-    return found[0] if found else None
-
-
-def chart_traces(block) -> dict[str, list]:
-    """Plotly traces of the one chart in `block`: name -> [x, y]. Plotly may ship y as a typed array."""
-    (chart,) = block.get("plotly_chart")
-    out = {}
-    for t in json.loads(chart.proto.spec)["data"]:
-        y = t["y"]
-        if isinstance(y, dict):
-            y = np.frombuffer(base64.b64decode(y["bdata"]), dtype=y["dtype"])
-        out[t["name"]] = [_undate(t["x"], -1), np.asarray(y, dtype=float).tolist()]
-    return out
+def golden(page: str, case: str):
+    """What `page` rendered for `case` (one JSON file per page, keyed by test case)."""
+    return json.loads((FIXTURES / f"golden_{page}.json").read_text())[case]
 
 
 # --------------------------------------------------------------------------- comparison helpers
@@ -132,26 +80,9 @@ def assert_same_rows(page: pd.DataFrame, api: pd.DataFrame, cols: list[str]) -> 
 
 # --------------------------------------------------------------------------- Paper Trading
 
-@pytest.fixture(autouse=True)
-def pages_read_fixture_ledgers(monkeypatch, ledger_dir):
-    monkeypatch.setattr(model.paper, "PAPER_DIR", ledger_dir)
-
-
-def paper_tabs(case: str, setup) -> list[dict]:
+def paper_tabs(case: str) -> list[dict]:
     """Per strategy tab: its tables, metrics and chart, as recorded from the Paper Trading page."""
-    golden = Golden("paper_trading")
-    if RECORD:
-        at = run("1_Paper_Trading.py", setup)
-        golden.save(case, [{
-            "picks": encode_df(table(tab, "pick", lacks="result")),
-            "preds": encode_df(table(tab, "Καλύτερο")),
-            "bets": encode_df(table(tab, "result")),
-            "metrics": {m.label: m.value for m in tab.metric},
-            "traces": chart_traces(tab) if tab.get("plotly_chart") else None,
-            "report": encode_df(table(tab, "log_loss")),
-            "sweep": encode_df(table(tab, "roi_%")),
-        } for tab in at.tabs])
-    tabs = golden.load(case)
+    tabs = golden("paper_trading", case)
     assert len(tabs) == len(STRATEGIES)
     return [{k: decode_df(v) if k not in ("metrics", "traces") else v for k, v in tab.items()} for tab in tabs]
 
@@ -159,12 +90,7 @@ def paper_tabs(case: str, setup) -> list[dict]:
 @pytest.mark.parametrize("book", ["avg", "max", "b365"])
 @pytest.mark.parametrize("edge", [None, 0.0, 0.03])
 def test_paper_trading(client, book, edge):
-    def setup(at):
-        for sid in STRATEGIES:
-            at.selectbox(key=f"book_{sid}").set_value(book)
-            if edge is not None:
-                at.slider(key=f"edge_{sid}").set_value(edge)
-    tabs = paper_tabs(f"{book}|{edge}", setup)
+    tabs = paper_tabs(f"{book}|{edge}")
 
     for tab, sid in zip(tabs, STRATEGIES):
         e = STRATEGIES[sid]["edge"] if edge is None else edge
@@ -202,7 +128,7 @@ def test_paper_trading(client, book, edge):
             traces, series = tab["traces"], pd.DataFrame(summary["series"])
             x, profit = traces["Κέρδος (μονάδες)"]
             _, clv_pct = traces["Μέσο CLV %"]
-            x = _undate(x, +1)
+            x = _undate(x)
             pd.testing.assert_series_equal(per_date_last(x, profit), per_date_last(series.date, series.cumulative_profit),
                                            check_exact=False, atol=ATOL, rtol=0)
             pd.testing.assert_series_equal(per_date_last(x, clv_pct),
@@ -238,10 +164,7 @@ def test_paper_trading(client, book, edge):
 
 def test_paper_trading_league_filter(client):
     leagues = ["E0", "SP1"]
-    def setup(at):
-        for sid in STRATEGIES:
-            at.multiselect(key=f"leagues_{sid}").set_value(leagues)
-    tabs = paper_tabs("leagues=E0,SP1", setup)
+    tabs = paper_tabs("leagues=E0,SP1")
     for tab, sid in zip(tabs, STRATEGIES):
         api = items(client, f"/api/v1/strategies/{sid}/predictions?book=avg&league=E0&league=SP1")
         assert len(api) and set(api.league) <= set(leagues)
@@ -259,18 +182,7 @@ def test_paper_trading_league_filter(client):
     (50.0, 0.80, 0.15, ["ou25", "1x2"]),
 ])
 def test_optimizer(client, book, budget, min_prob, min_edge, markets):
-    def setup(at):
-        at.number_input[0].set_value(budget)
-        at.multiselect[0].set_value(markets)
-        at.slider[0].set_value(min_prob)
-        at.slider[1].set_value(min_edge)
-        at.selectbox[0].set_value(book)
-    golden, case = Golden("optimizer"), f"{book}|{budget}|{min_prob}|{min_edge}|{','.join(markets)}"
-    if RECORD:
-        at = run("2_Optimizer.py", setup)
-        golden.save(case, {"legs": encode_df(table(at, "bookmaker")), "summary": encode_df(table(at, "Ποντάρισμα")),
-                           "coupons": [encode_df(tab.dataframe[0].value) for tab in at.tabs]})
-    page = golden.load(case)
+    page = golden("optimizer", f"{book}|{budget}|{min_prob}|{min_edge}|{','.join(markets)}")
 
     api = client.post("/api/v1/optimize", json={"budget": budget, "markets": markets, "min_prob": min_prob,
                                                 "min_edge": min_edge, "odds": {"source": "snapshot", "book": book}}).json()

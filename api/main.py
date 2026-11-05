@@ -18,6 +18,7 @@ import pandas as pd
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 
 from model.paper import PAPER_DIR
@@ -31,6 +32,7 @@ from .odds import LiveOddsCache
 
 log = logging.getLogger(__name__)
 CONTRACT = Path(__file__).resolve().parent.parent / "openapi.yaml"
+WEB_DIST = CONTRACT.parent / "web" / "dist"          # the built frontend (`npm run build` in web/)
 
 TITLES = {
     "validation_failed": "The request is invalid",
@@ -98,7 +100,8 @@ def _both(*fields: str) -> set[str]:
 
 
 def create_app(ledgers: uc.Ledgers, odds: uc.LiveOdds,
-               today: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.today().normalize()) -> FastAPI:
+               today: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.today().normalize(),
+               web: Path | None = None) -> FastAPI:
     app = FastAPI(title="BET-Football API", openapi_url=None, docs_url=None, redoc_url=None)
 
     # ----------------------------------------------------------------------- errors
@@ -215,10 +218,23 @@ def create_app(ledgers: uc.Ledgers, odds: uc.LiveOdds,
             source=o.source, book=None if live else o.book, leagues=o.leagues if live else None,
             bookmakers=o.bookmakers if live else None, today=today()))
 
+    # ----------------------------------------------------------------------- frontend
+    if web is not None:
+        # Hashed file names, so assets can be cached; index.html must be revalidated or a deploy
+        # leaves browsers on an old page that points at assets which no longer exist.
+        app.mount("/assets", StaticFiles(directory=web / "assets"), name="assets")
+
+        @app.get("/", include_in_schema=False)
+        def index() -> FileResponse:
+            return FileResponse(web / "index.html", headers={"Cache-Control": "no-cache"})
+
     return app
 
 
 def from_env() -> FastAPI:
     """The production app: ledgers from model/paper, Odds API key from the ODDS_API_KEY secret."""
     logging.basicConfig(level=logging.INFO)
-    return create_app(CsvLedgers(PAPER_DIR), LiveOddsCache(os.environ.get("ODDS_API_KEY", "")))
+    web = WEB_DIST if (WEB_DIST / "index.html").exists() and (WEB_DIST / "assets").is_dir() else None
+    if web is None:
+        log.warning("no frontend build at %s: serving the API only", WEB_DIST)
+    return create_app(CsvLedgers(PAPER_DIR), LiveOddsCache(os.environ.get("ODDS_API_KEY", "")), web=web)

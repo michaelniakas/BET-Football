@@ -5,5 +5,10 @@ __pycache__/
 *.pyc
 .venv/
 .env
+.env.*
 .DS_Store
 docs/HANDOFF.md
+# frontend: dependencies, build output, types generated from openapi.yaml
+web/node_modules/
+web/dist/
+web/src/schema.d.ts

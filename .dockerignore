@@ -3,6 +3,11 @@
 !openapi.yaml
 !api/
 !model/
+!web/
+web/node_modules/
+web/dist/
+web/src/schema.d.ts
+web/.env*
 model/data/
 model/output/
 **/__pycache__/
