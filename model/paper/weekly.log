@@ -93,3 +93,83 @@ Traceback (most recent call last):
 requests.exceptions.ConnectTimeout: HTTPSConnectionPool(host='understat.com', port=443): Max retries exceeded with url: /getLeagueData/EPL/2014 (Caused by ConnectTimeoutError(<HTTPSConnection(host='understat.com', port=443) at 0x7fdef7f6db50>, 'Connection to understat.com timed out. (connect timeout=30)'))
 [ou25] settled 48 of 48 finished fixtures
 Downloading 5 leagues x 15 seasons (cached)...
+===== 2026-11-05 11:23 UTC =====
+Traceback (most recent call last):
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/requests/models.py", line 1116, in json
+    return complexjson.loads(self.text, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/json/decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/json/decoder.py", line 356, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/runner/work/BET-Football/BET-Football/model/paper.py", line 144, in <module>
+    main()
+  File "/home/runner/work/BET-Football/BET-Football/model/paper.py", line 138, in main
+    log(name)
+  File "/home/runner/work/BET-Football/BET-Football/model/paper.py", line 46, in log
+    fx = score_fixtures(cfg["leagues"], cfg["market"], cfg["features"])
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/BET-Football/BET-Football/model/predict.py", line 23, in score_fixtures
+    history, builder = build_dataset(leagues, first_season)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/BET-Football/BET-Football/model/run.py", line 26, in build_dataset
+    matches = xg.attach_xg(matches, download)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/BET-Football/BET-Football/model/xg.py", line 72, in attach_xg
+    download(seasons)
+  File "/home/runner/work/BET-Football/BET-Football/model/xg.py", line 33, in download
+    path.write_text(json.dumps(r.json()["dates"]), encoding="utf-8")
+                               ^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/requests/models.py", line 1120, in json
+    raise RequestsJSONDecodeError(e.msg, e.doc, e.pos)
+requests.exceptions.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+[ou25] nothing to settle
+Downloading 5 leagues x 15 seasons (cached)...
+===== 2026-11-05 11:50 UTC =====
+[ou25] nothing to settle
+Downloading 5 leagues x 15 seasons (cached)...
+  understat unavailable (JSONDecodeError), using cached xG only
+[ou25] no fixtures with odds
+
+[ou25] 48 settled fixtures, 2026-10-30 .. 2026-11-02
+                  log_loss  brier   n
+model                0.727  0.535  48
+market pre-match     0.714  0.522  48
+market closing       0.706  0.515  48
+
+Picks at market average odds, edge > 6%:
+  none yet
+
+All thresholds (CLV is the number to watch; ROI needs hundreds of bets):
+     bets  staked  profit   roi_%  roi_se_%  avg_odds  hit_%  clv_%  beat_close_%
+>0% 2.000   2.000  -0.640 -32.000    68.000     1.415 50.000 -3.468         0.000
+[1x2] settled 144 of 145 finished fixtures
+Downloading 16 leagues x 15 seasons (cached)...
+  understat unavailable (JSONDecodeError), using cached xG only
+[1x2] logged 0 new fixtures, 0 picks at edge > 5%
+
+[1x2] 144 settled fixtures, 2026-10-30 .. 2026-11-02
+                  log_loss  brier    n
+model                0.937  0.551  144
+market pre-match     0.935  0.551  144
+market closing       0.931  0.548  144
+
+Picks at market average odds, edge > 5%:
+  none yet
+
+All thresholds (CLV is the number to watch; ROI needs hundreds of bets):
+      bets  staked  profit   roi_%  roi_se_%  avg_odds  hit_%  clv_%  beat_close_%
+>0% 27.000  27.000  -9.390 -34.778    18.051     2.578 37.037 -3.304        25.926
+>2% 10.000  10.000  -5.320 -53.200    33.349     3.116 20.000 -4.941         0.000
+>4%  2.000   2.000   1.130  56.500   156.500     3.055 50.000 -7.396         0.000
