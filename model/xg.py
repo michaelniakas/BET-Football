@@ -26,11 +26,17 @@ def download(seasons: list[int], refresh_current: bool = True) -> None:
                 continue
             url = API_URL.format(league=us_league, season=season)
             headers = {"X-Requested-With": "XMLHttpRequest", "Referer": url.replace("getLeagueData", "league")}
-            r = requests.get(url, headers=headers, timeout=30)
-            if r.status_code != 200:
-                print(f"  skip understat {league} {season} (HTTP {r.status_code})")
-                continue
-            path.write_text(json.dumps(r.json()["dates"]), encoding="utf-8")
+            try:
+                r = requests.get(url, headers=headers, timeout=30)
+                if r.status_code != 200:
+                    print(f"  skip understat {league} {season} (HTTP {r.status_code})")
+                    continue
+                dates = r.json()["dates"]
+            except (requests.RequestException, ValueError, KeyError) as e:
+                # Understat blocks some hosts (GitHub runners): stop trying, keep whatever xG is cached.
+                print(f"  understat unavailable ({type(e).__name__}), using cached xG only")
+                return
+            path.write_text(json.dumps(dates), encoding="utf-8")
 
 
 def load(seasons: list[int]) -> pd.DataFrame:
