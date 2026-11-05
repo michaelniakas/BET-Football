@@ -28,6 +28,16 @@ jobs:
     needs: contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        # Same major as Toft's postgres add-on (postgres:16).
+        image: postgres:16@sha256:933463a6c8eba2b9f5cd414138738cd8d5519cd2c471214c222652f547a66a32
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

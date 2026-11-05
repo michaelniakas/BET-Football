@@ -3,12 +3,16 @@ request/response pair against openapi.yaml."""
 from __future__ import annotations
 
 import json
+import os
+import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl
 
 import httpx
 import pandas as pd
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from openapi_core import Config, OpenAPI
@@ -16,9 +20,11 @@ from openapi_core.datatypes import RequestParameters
 from openapi_core.templating.paths.exceptions import OperationNotFound, PathNotFound
 from werkzeug.datastructures import Headers, ImmutableMultiDict
 
-from api.ledgers import CsvLedgers
+from api import migrate
+from api.ledgers import CsvLedgers, PostgresLedgers
 from api.main import create_app
 from api.odds import LiveOddsCache
+from model.paper import STRATEGIES
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -45,6 +51,49 @@ def ledger_dir(tmp_path_factory) -> Path:
         df["logged_at"] += shift
         df.to_csv(out / f.name, index=False)
     return out
+
+
+@contextmanager
+def new_database():
+    """A new, empty database on the server in TEST_DATABASE_URL (CI runs a Postgres service), dropped after."""
+    admin = os.environ.get("TEST_DATABASE_URL")
+    if not admin:
+        if os.environ.get("CI"):
+            pytest.fail("TEST_DATABASE_URL is not set: CI must run the Postgres tests")
+        pytest.skip("TEST_DATABASE_URL is not set")
+    name = f"test_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{name}"')
+    try:
+        yield psycopg.conninfo.make_conninfo(admin, dbname=name)
+    finally:
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
+
+
+@pytest.fixture
+def pg_url():
+    with new_database() as url:
+        yield url
+
+
+@pytest.fixture(scope="session")
+def pg_ledger_url(ledger_dir):
+    """A database holding the fixture ledgers, shared by the tests that only read it."""
+    with new_database() as url:
+        migrate.up(url)
+        csv, pg = CsvLedgers(ledger_dir), PostgresLedgers(url)
+        for s in STRATEGIES:
+            pg.save(s, csv.read(s))
+        yield url
+
+
+@pytest.fixture(params=["csv", "postgres"])
+def ledgers(request, ledger_dir):
+    """Every API and golden test runs on both ledger implementations."""
+    if request.param == "csv":
+        return CsvLedgers(ledger_dir)
+    return PostgresLedgers(request.getfixturevalue("pg_ledger_url"))
 
 
 # --------------------------------------------------------------------------- fake Odds API
@@ -140,10 +189,12 @@ class ContractClient(TestClient):
 
 
 @pytest.fixture
-def make_client(ledger_dir):
+def make_client(ledgers):
+    default = ledgers
+
     def make(http: FakeOddsHttp | None = None, key: str = "", now=None, ledgers=None) -> ContractClient:
         odds = LiveOddsCache(key, get=http or FakeOddsHttp(), now=now or (lambda: datetime.now(UTC)))
-        app = create_app(ledgers or CsvLedgers(ledger_dir), odds)
+        app = create_app(ledgers or default, odds)
         return ContractClient(app, raise_server_exceptions=False)
     return make
 

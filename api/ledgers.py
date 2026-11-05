@@ -1,4 +1,4 @@
-"""Paper-trading ledgers as written by `python -m model.paper` (one CSV per strategy)."""
+"""Paper-trading ledgers as written by `python -m model.paper`: CSV files, or Postgres from phase 3 on."""
 from __future__ import annotations
 
 import io
@@ -10,10 +10,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import psycopg
 import requests
+from psycopg import sql
 
 from model.data import MARKETS
-from model.paper import STRATEGIES
+from model.paper import KEY, STRATEGIES
 
 log = logging.getLogger(__name__)
 # Where the paper-trading workflow commits the ledgers (scheduled workflows run on `main`).
@@ -86,3 +88,95 @@ class GithubLedgers:
                 df = cached[1] if cached else self._fallback.read(strategy)
             self._cache[strategy] = (self._now(), df)
             return df
+
+
+class PostgresLedgers:
+    """The ledgers in Postgres (api/migrations), one table per strategy.
+
+    Reads return the same frame `CsvLedgers` does for the same rows, in the order they were logged.
+    """
+    # ponytail: a connection per call (2 users); a pool (psycopg_pool) once requests queue on connect.
+
+    TEXT = ["league", "home", "away"]
+
+    def __init__(self, url: str):
+        self._url = url
+        self._columns: dict[str, list[str]] = {}
+
+    def _table(self, strategy: str) -> sql.Identifier:
+        if strategy not in STRATEGIES:
+            raise KeyError(strategy)
+        return sql.Identifier(f"ledger_{strategy}")
+
+    def columns(self, conn: psycopg.Connection, strategy: str) -> list[str]:
+        """The table's columns in DDL order, without `seq`: the migration is the one list of them."""
+        if strategy not in self._columns:
+            rows = conn.execute("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public'"
+                                " AND table_name = %s AND column_name <> 'seq' ORDER BY ordinal_position",
+                                (f"ledger_{strategy}",)).fetchall()
+            if not rows:
+                raise RuntimeError(f"no table ledger_{strategy}: run python -m api.migrate up")
+            self._columns[strategy] = [r[0] for r in rows]
+        return self._columns[strategy]
+
+    def read(self, strategy: str) -> pd.DataFrame:
+        """Callers must not mutate the returned frame (same contract as `CsvLedgers.read`)."""
+        table = self._table(strategy)
+        with psycopg.connect(self._url) as conn:
+            cols = self.columns(conn, strategy)
+            rows = conn.execute(sql.SQL("SELECT {} FROM {} ORDER BY seq").format(
+                sql.SQL(", ").join(map(sql.Identifier, cols)), table)).fetchall()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=cols)
+        target = MARKETS[STRATEGIES[strategy]["market"]]["target"]
+        for c in cols:
+            if c in ("date", "logged_at"):
+                df[c] = pd.to_datetime(df[c]).astype("datetime64[us]")
+            elif c in self.TEXT or c == target:
+                df[c] = df[c].astype("str")
+            elif c == "season":
+                df[c] = df[c].astype("int64")
+            else:
+                df[c] = df[c].astype("float64")
+        return df
+
+    def save(self, strategy: str, ledger: pd.DataFrame) -> tuple[int, int]:
+        """Write back a ledger the paper job has changed, in one transaction: (rows added, rows settled).
+
+        New fixtures are inserted; an existing fixture only gets its result and closing columns, and
+        only while it is unsettled. A snapshot (probabilities, odds, logged_at) is never overwritten.
+        """
+        table = self._table(strategy)
+        spec = MARKETS[STRATEGIES[strategy]["market"]]
+        settle_cols = [spec["target"]] + [f"close_{s}" for s in spec["suffixes"]]
+        with psycopg.connect(self._url) as conn, conn.transaction():
+            cols = self.columns(conn, strategy)
+            unknown = set(ledger.columns) - set(cols)
+            if unknown:     # the job writes a column the schema doesn't have: needs a migration, not a drop
+                raise ValueError(f"ledger_{strategy} has no column(s) {sorted(unknown)}")
+            cols = [c for c in cols if c in ledger.columns]
+            values = ledger[cols].astype(object).where(ledger[cols].notna(), None)
+            values["date"] = [v.date() for v in values["date"]]               # NOT NULL in both
+            values["logged_at"] = [v.to_pydatetime() for v in values["logged_at"]]
+            ident = lambda names: sql.SQL(", ").join(map(sql.Identifier, names))    # noqa: E731
+            update = [c for c in settle_cols if c in cols]
+            q = sql.SQL("INSERT INTO {t} AS l ({cols}) VALUES ({ph}) ON CONFLICT ({key}) DO ").format(
+                t=table, cols=ident(cols), ph=sql.SQL(", ").join(sql.Placeholder() * len(cols)), key=ident(KEY))
+            if update:
+                q += sql.SQL("UPDATE SET {sets} WHERE l.{target} IS NULL AND EXCLUDED.{target} IS NOT NULL").format(
+                    sets=sql.SQL(", ").join(sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c)) for c in update),
+                    target=sql.Identifier(spec["target"]))
+            else:
+                q += sql.SQL("NOTHING")
+            q += sql.SQL(" RETURNING (xmax = 0)")         # true = inserted, false = updated
+            added = settled = 0
+            with conn.cursor() as cur:
+                cur.executemany(q, values.itertuples(index=False, name=None), returning=True)
+                while True:
+                    row = cur.fetchone()
+                    if row is not None:
+                        added, settled = added + row[0], settled + (not row[0])
+                    if not cur.nextset():
+                        break
+        return added, settled

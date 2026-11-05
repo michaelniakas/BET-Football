@@ -72,6 +72,20 @@ ledgers: both pages, both languages, tables, metrics, both charts, no console er
 - Disable `.github/workflows/paper-trading.yml`.
 - **Check**: one run on Toft; row counts match the CSVs; rollback (re-enable the workflow, CSV reader) tested.
 
+**Approved (2026-11-05)**: `psycopg[binary]` 3.3.6 (3.3.7/3.3.8 under two weeks old); own SQL migration runner
+(`api/migrate.py`, up/down files) instead of Alembic + SQLAlchemy. `model/` stays untouched: the worker exports the
+database to CSVs in a scratch dir, runs `model.paper weekly` unchanged, writes back in one transaction (new fixtures
+inserted; an existing row only gets result + closing columns, only while unsettled). Toft facts (source read):
+postgres:16 add-on (panel only), no DATABASE_URL injected, worker has no health check, `start_command` applies to
+git builds, no cron, `migrate_command` runs in the new image before it starts and aborts the deploy on failure,
+backups = one restic run over raw volumes per machine (not a consistent Postgres backup: the worker writes a CSV
+export to its volume after each run instead).
+
+**Progress (2026-11-05)**: step 1 (`api/migrations/0001_ledgers`, `api/migrate.py`, CI Postgres service) and step 2
+(`PostgresLedgers`, `api/sync.py`) done, uncommitted. Every API + golden test runs on CSV and Postgres; the real
+ledgers (48 + 145) import under all constraints and read back equal. `PostgresLedgers.read` p50 20 ms on Docker
+Desktop (connect 6.5 ms, query 1.5 ms, the rest building the frame): no cache, no pool. Next: step 3 (worker).
+
 ## Testing the branch on Toft
 
 Decided 2026-11-05: the existing `bet-app` service is switched to branch `rebuild` (it is only used by us), with
