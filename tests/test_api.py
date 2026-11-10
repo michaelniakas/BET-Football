@@ -1,6 +1,8 @@
 """Endpoint behaviour on the fixture ledgers. Every call is also checked against openapi.yaml (conftest)."""
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import pandas as pd
 import pytest
 import requests
@@ -141,7 +143,7 @@ def test_invalid_league(client):
     problem(client.get(f"{S}/ou25/predictions?league=XX"), 422, "validation_failed")
 
 
-@pytest.mark.parametrize("path", ["picks", "predictions", "results/summary", "results/bets",
+@pytest.mark.parametrize("path", ["picks", "predictions", "results/summary", "results/bets", "results/fixtures",
                                   "results/edge-sweep", "results/probability-report"])
 def test_unknown_strategy(client, path):
     problem(client.get(f"{S}/nope/{path}"), 404, "strategy_not_found")
@@ -180,6 +182,210 @@ def test_probability_report(client):
     rep = client.get(f"{S}/1x2/results/probability-report").json()
     assert rep["n"] == 38                                       # 40 settled, 2 without closing odds
     assert [r["source"] for r in rep["rows"]] == ["model", "market_pre_match", "market_closing"]
+
+
+# --------------------------------------------------------------------------- history
+
+LEDGER_COLS = {"1x2": ("HDA", "hda", "result"), "ou25": ("OU", "ou", "ou")}     # outcomes, suffixes, result column
+
+
+def expected_fixtures(ledger_dir, strategy: str, book: str, min_edge: float) -> list[dict]:
+    """The settled fixtures and their bets, worked out from the ledger file row by row (no model.backtest)."""
+    outcomes, suffixes, target = LEDGER_COLS[strategy]
+    num = lambda x: None if pd.isna(x) else float(x)                            # noqa: E731
+    rows = []
+    for r in pd.read_csv(ledger_dir / f"ledger_{strategy}.csv", parse_dates=["date"]).to_dict("records"):
+        if pd.isna(r.get(target)):
+            continue
+        best = None
+        for o, s in zip(outcomes, suffixes):
+            odds = r[f"{book}_{s}"]
+            if pd.isna(odds) or odds > 10:
+                continue
+            edge = r[f"p_{o}"] * odds - 1
+            if best is None or edge > best["edge"]:
+                best = {"pick": o, "odds": odds, "edge": edge, "p_close": num(r.get(f"close_{s}"))}
+        bet = None
+        if best is not None and best["edge"] > min_edge:
+            p_close = best.pop("p_close")
+            bet = {**best, "stake": 1.0, "profit": best["odds"] - 1 if best["pick"] == r[target] else -1.0,
+                   "clv": None if p_close is None else best["odds"] * p_close - 1}
+        rows.append({
+            "date": r["date"].date().isoformat(), "league": r["league"], "home": r["home"], "away": r["away"],
+            "result": r[target],
+            "bet_status": "no_bet" if bet is None else "won" if bet["pick"] == r[target] else "lost",
+            "outcomes": [{"outcome": o, "p_model": r[f"p_{o}"], "p_market": r[f"mkt_{s}"],
+                          "p_close": num(r.get(f"close_{s}"))} for o, s in zip(outcomes, suffixes)],
+            "bet": bet,
+        })
+    return rows
+
+
+def match_key(r: dict) -> tuple:
+    return r["date"], r["league"], r["home"], r["away"]
+
+
+@pytest.mark.parametrize("strategy, settled", [("ou25", 48), ("1x2", 40)])
+def test_settled_fixtures_match_the_ledger(client, ledger_dir, strategy, settled):
+    want = {match_key(r): r for r in expected_fixtures(ledger_dir, strategy, "max", 0.0)}
+    got = all_items(client, f"{S}/{strategy}/results/fixtures?book=max&min_edge=0")
+    assert len(got) == len(want) == settled                     # one row per settled fixture, bet or not
+    assert {g["bet_status"] for g in got} == {"won", "lost", "no_bet"}
+    for g in got:
+        w = want[match_key(g)]
+        assert (g["result"], g["bet_status"]) == (w["result"], w["bet_status"])
+        assert g["outcomes"] == [pytest.approx(o) for o in w["outcomes"]]
+        assert g["bet"] == (None if w["bet"] is None else pytest.approx(w["bet"]))
+    assert [g["date"] for g in got] == sorted((g["date"] for g in got), reverse=True)     # default: -date
+
+
+def test_settled_fixtures_follow_book_and_min_edge(client, ledger_dir):
+    want = {match_key(r): r["bet"] for r in expected_fixtures(ledger_dir, "1x2", "avg", 0.01)}
+    got = all_items(client, f"{S}/1x2/results/fixtures?min_edge=0.01")
+    assert sorted(map(match_key, got)) == sorted(want)
+    assert 0 < sum(g["bet"] is not None for g in got) < 25                 # fewer bets than at max / 0
+    assert all(g["bet"] == (None if want[match_key(g)] is None else pytest.approx(want[match_key(g)])) for g in got)
+
+
+def test_settled_fixtures_filters(client, ledger_dir):
+    rows = expected_fixtures(ledger_dir, "1x2", "max", 0.0)
+    url = f"{S}/1x2/results/fixtures?book=max&min_edge=0"
+    league, bet = rows[0]["league"], next(r for r in rows if r["bet"] is not None)
+    days = sorted({r["date"] for r in rows})
+    lo, hi = days[1], days[-2]
+
+    def team(part: str):
+        return lambda r: part.lower() in r["home"].lower() or part.lower() in r["away"].lower()
+
+    home, away = rows[0]["home"][1:-1], rows[0]["away"][1:-1]
+    cases = {
+        f"league={league}": lambda r: r["league"] == league,
+        f"league={league}&league=E0": lambda r: r["league"] in (league, "E0"),
+        f"team={quote(home.upper())}": team(home),                               # any case, home ...
+        f"team={quote(away.upper())}": team(away),                               # ... or away
+        f"date_from={lo}&date_to={hi}": lambda r: lo <= r["date"] <= hi,         # both inclusive
+        f"date_from={hi}": lambda r: r["date"] >= hi,
+        "bet_status=no_bet": lambda r: r["bet"] is None,
+        "bet_status=won&bet_status=lost": lambda r: r["bet"] is not None,
+        f"league={bet['league']}&date_from={bet['date']}&bet_status={bet['bet_status']}":
+            lambda r: (r["league"], r["bet_status"]) == (bet["league"], bet["bet_status"]) and r["date"] >= bet["date"],
+    }
+    for query, keep in cases.items():
+        want = [r for r in rows if keep(r)]
+        assert 0 < len(want) < len(rows), query                 # the filter keeps some rows and drops some
+        got = all_items(client, f"{url}&{query}")
+        assert sorted(map(match_key, got)) == sorted(map(match_key, want)), query
+
+    body = client.get(f"{url}&date_from={hi}&date_to={lo}").json()               # reversed range: nothing, no error
+    assert body["items"] == [] and body["total"] == 0
+
+
+def test_settled_fixtures_sort_puts_no_bet_last(client):
+    for sort in ("profit", "-profit", "-edge", "clv"):
+        got = all_items(client, f"{S}/1x2/results/fixtures?book=max&min_edge=0&sort={sort}")
+        field = sort.lstrip("-")
+        values = [g["bet"][field] for g in got if g["bet"] is not None and g["bet"][field] is not None]
+        assert values == sorted(values, reverse=sort.startswith("-")), sort
+        missing = [g["bet"] is None or g["bet"][field] is None for g in got]
+        assert True in missing and missing == sorted(missing), sort              # all the missing ones at the end
+
+
+def test_settled_fixtures_pages(client):
+    url = f"{S}/1x2/results/fixtures?book=max&min_edge=0&bet_status=no_bet"
+    everything = all_items(client, url)
+    page = client.get(f"{url}&limit=5&offset=5").json()
+    assert page["total"] == len(everything) > 10 and page["items"] == everything[5:10]
+
+
+@pytest.mark.parametrize("query, parameter", [
+    ("bet_status=zz", "bet_status"), ("date_from=2026-13-01", "date_from"), ("date_to=yesterday", "date_to"),
+    ("date_from=0", "date_from"), ("date_to=2026-11-01T00:00:00", "date_to"), ("date_from=20261101", "date_from"),
+    ("team=", "team"), ("team=" + "x" * 65, "team"), ("league=XX", "league"), ("sort=league", "sort"),
+    ("min_edge=0.51", "min_edge"), ("limit=501", "limit"),
+])
+def test_settled_fixtures_invalid_query(client, query, parameter):
+    body = problem(client.get(f"{S}/1x2/results/fixtures?{query}"), 422, "validation_failed")
+    assert [e["parameter"] for e in body["errors"]] == [parameter]
+
+
+@pytest.mark.parametrize("query, parameter", [
+    ("date_from=2026-13-01", "date_from"), ("date_to=0", "date_to"), ("team=" + "x" * 65, "team"),
+    ("league=XX", "league"),
+])
+def test_results_summary_invalid_filter(client, query, parameter):
+    body = problem(client.get(f"{S}/1x2/results/summary?{query}"), 422, "validation_failed")
+    assert [e["parameter"] for e in body["errors"]] == [parameter]
+
+
+def expected_buckets(bets: list[dict], min_edge: float) -> list[tuple]:
+    """(min_edge, max_edge, bets, profit) per non-empty bucket: the sweep's thresholds above `min_edge`."""
+    bounds = [min_edge, *(e for e in SWEEP_EDGES if e > min_edge), None]
+    buckets = []
+    for a, b in zip(bounds, bounds[1:]):
+        mine = [x for x in bets if x["edge"] > a and (b is None or x["edge"] <= b)]
+        if mine:
+            buckets.append((a, b, len(mine), pytest.approx(sum(x["profit"] for x in mine))))
+    return buckets
+
+
+def test_results_summary_edge_buckets_start_at_min_edge(client, ledger_dir):
+    bets = [r["bet"] for r in expected_fixtures(ledger_dir, "1x2", "max", 0.05) if r["bet"] is not None]
+    s = client.get(f"{S}/1x2/results/summary?book=max&min_edge=0.05").json()
+    assert s["by_edge"][0]["min_edge"] == 0.05 and s["by_edge"][0]["max_edge"] == 0.06     # not (0.04, 0.06]
+    assert [(x["min_edge"], x["max_edge"], x["bets"], x["profit"]) for x in s["by_edge"]] == expected_buckets(bets, 0.05)
+    assert len(s["by_edge"]) > 1
+
+
+@pytest.mark.parametrize("strategy", ["ou25", "1x2"])
+def test_results_summary_filters_and_breakdowns(client, ledger_dir, strategy):
+    rows = expected_fixtures(ledger_dir, strategy, "max", 0.0)
+    days = sorted({r["date"] for r in rows})
+    with_bet = [r["league"] for r in rows if r["bet"] is not None]
+    lo, league = days[1], max(with_bet, key=with_bet.count)
+    cases = {
+        "": lambda r: True,
+        f"&date_from={lo}": lambda r: r["date"] >= lo,
+        f"&league={league}&date_to={days[-2]}": lambda r: r["league"] == league and r["date"] <= days[-2],
+    }
+    for query, keep in cases.items():
+        kept = [r for r in rows if keep(r)]
+        bets = [(r["league"], r["bet"]) for r in kept if r["bet"] is not None]
+        assert bets, query
+        s = client.get(f"{S}/{strategy}/results/summary?book=max&min_edge=0{query}").json()
+        m = s["metrics"]
+        assert s["settled_matches"] == len(kept) and m["bets"] == len(bets) == len(s["series"]), query
+        profit = sum(b["profit"] for _, b in bets)
+        assert m["profit"] == pytest.approx(profit) and m["roi"] == pytest.approx(profit / len(bets))
+        assert m["hit_rate"] == pytest.approx(sum(b["profit"] > 0 for _, b in bets) / len(bets))
+
+        leagues = sorted({lg for lg, _ in bets})
+        assert [x["league"] for x in s["by_league"]] == leagues
+        for x in s["by_league"]:
+            mine = [b for lg, b in bets if lg == x["league"]]
+            assert x["bets"] == len(mine) and x["profit"] == pytest.approx(sum(b["profit"] for b in mine))
+            assert x["avg_odds"] == pytest.approx(sum(b["odds"] for b in mine) / len(mine))
+
+        buckets = expected_buckets([b for _, b in bets], 0.0)
+        assert [(x["min_edge"], x["max_edge"], x["bets"], x["profit"]) for x in s["by_edge"]] == buckets
+        assert sum(x["bets"] for x in s["by_edge"]) == m["bets"] == sum(x["bets"] for x in s["by_league"])
+    assert len(buckets) > 1
+
+
+def test_results_summary_open_ended_edge_bucket(make_client, ledger_dir, tmp_path):
+    ledger = pd.read_csv(ledger_dir / "ledger_1x2.csv")
+    ledger[["avg_h", "avg_d", "avg_a"]] *= 1.3                  # the fixture ledgers have no edge above 15%
+    ledger.to_csv(tmp_path / "ledger_1x2.csv", index=False)
+    edges = [r["bet"]["edge"] for r in expected_fixtures(tmp_path, "1x2", "avg", 0.0) if r["bet"] is not None]
+    s = make_client(ledgers=CsvLedgers(tmp_path)).get(f"{S}/1x2/results/summary?min_edge=0").json()
+    last = s["by_edge"][-1]
+    assert (last["min_edge"], last["max_edge"]) == (0.15, None)
+    assert last["bets"] == sum(e > 0.15 for e in edges) > 0
+    assert sum(x["bets"] for x in s["by_edge"]) == s["metrics"]["bets"] == len(edges)
+
+
+def test_results_summary_with_nothing_left(client):
+    s = client.get(f"{S}/1x2/results/summary?team=zzzz-no-such-team").json()
+    assert s == {"settled_matches": 0, "metrics": None, "series": [], "by_league": [], "by_edge": []}
 
 
 # --------------------------------------------------------------------------- optimize

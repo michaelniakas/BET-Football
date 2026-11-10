@@ -13,11 +13,11 @@ info:
     - **Dates.** `date` fields are match days (`YYYY-MM-DD`). "Upcoming" means `date >= today` in the
       server's timezone (UTC). Timestamps are RFC 3339.
     - **Outcomes.** 1X2: `H`, `D`, `A`. Over/Under 2.5: `O`, `U`. Display labels are the client's job.
-    - **Collections** (picks, predictions, settled bets) are paginated with `limit` / `offset` and return
+    - **Collections** (picks, predictions, settled bets, settled fixtures) are paginated with `limit` / `offset` and return
       `{items, total, limit, offset}`. Sorting is `sort=field,-field` (`-` = descending), allowed fields
       enumerated per endpoint; the match key (date, league, home, away) is always the final tie-breaker so
       pages are stable. Equality filters are repeatable query parameters named after the field
-      (`league=E0&league=SP1`).
+      (`league=E0&league=SP1`). Range filters are `<field>_from` / `<field>_to`, both inclusive.
     - **Reports** with a fixed, small size (catalog, summary, edge sweep, probability report, optimize)
       return an object with bounded arrays and are not paginated.
     - **Errors** are RFC 9457 problem details (`application/problem+json`). `code` is the stable,
@@ -146,10 +146,15 @@ paths:
       tags: [paper-trading]
       operationId: getResultsSummary
       summary: Metrics of the settled picks at `min_edge` / `book`, plus the cumulative profit and CLV series.
+      description: The filters narrow the settled matches before anything is computed.
       parameters:
         - $ref: "#/components/parameters/Strategy"
         - $ref: "#/components/parameters/Book"
         - $ref: "#/components/parameters/MinEdge"
+        - $ref: "#/components/parameters/League"
+        - $ref: "#/components/parameters/Team"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
       responses:
         "200":
           description: Summary. `metrics` is null when no settled match clears the threshold.
@@ -164,7 +169,7 @@ paths:
     get:
       tags: [paper-trading]
       operationId: listSettledBets
-      summary: The settled picks behind the summary.
+      summary: The settled picks at `min_edge` / `book`.
       parameters:
         - $ref: "#/components/parameters/Strategy"
         - $ref: "#/components/parameters/Book"
@@ -186,6 +191,52 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SettledBetPage" }
+        "404": { $ref: "#/components/responses/StrategyNotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /api/v1/strategies/{strategy}/results/fixtures:
+    get:
+      tags: [paper-trading]
+      operationId: listSettledFixtures
+      summary: Every settled fixture, with the pick at `min_edge` / `book` if there was one.
+      description: >-
+        Where the model worked and where it did not: model, pre-match market and closing probability per
+        outcome, the result, and the bet (same rule as the picks: the outcome with the largest edge, odds ≤ 10,
+        1 unit flat). Fixtures without a bet sort last on `edge`, `profit` and `clv`.
+      parameters:
+        - $ref: "#/components/parameters/Strategy"
+        - $ref: "#/components/parameters/Book"
+        - $ref: "#/components/parameters/MinEdge"
+        - $ref: "#/components/parameters/League"
+        - $ref: "#/components/parameters/Team"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - name: bet_status
+          in: query
+          style: form
+          explode: true
+          description: Keep only fixtures with these outcomes of the bet. Omitted = all. Duplicates are ignored.
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/BetStatus" }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: sort
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            uniqueItems: true
+            items: { enum: [date, -date, edge, -edge, profit, -profit, clv, -clv] }
+            default: [-date]
+      responses:
+        "200":
+          description: Page of settled fixtures.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettledFixturePage" }
         "404": { $ref: "#/components/responses/StrategyNotFound" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
         default: { $ref: "#/components/responses/Problem" }
@@ -289,6 +340,24 @@ components:
       schema:
         type: array
         items: { $ref: "#/components/schemas/League" }
+    Team:
+      name: team
+      in: query
+      description: Keep only matches whose home or away team contains this text, ignoring case.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+    DateFrom:
+      name: date_from
+      in: query
+      description: Keep only matches on or after this day.
+      schema: { type: string, format: date }
+    DateTo:
+      name: date_to
+      in: query
+      description: Keep only matches on or before this day. Earlier than `date_from` matches nothing.
+      schema: { type: string, format: date }
     Limit:
       name: limit
       in: query
@@ -438,6 +507,16 @@ components:
               type: array
               items: { $ref: "#/components/schemas/SettledBet" }
 
+    SettledFixturePage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/SettledFixture" }
+
     EdgeSweep:
       type: object
       required: [rows]
@@ -567,6 +646,59 @@ components:
               type: [number, "null"]
               description: Closing-line value, odds × p_close − 1.
 
+    BetStatus:
+      description: "`won` / `lost`: the pick at `min_edge` and how it ended. `no_bet`: no outcome cleared `min_edge`."
+      enum: [won, lost, no_bet]
+
+    FixtureOutcome:
+      type: object
+      required: [outcome, p_model, p_market, p_close]
+      properties:
+        outcome: { $ref: "#/components/schemas/Outcome" }
+        p_model: { type: number, minimum: 0, maximum: 1 }
+        p_market:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: No-vig pre-match market probability.
+        p_close:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+          description: No-vig closing probability. Null when no closing odds were found.
+
+    FixtureBet:
+      type: object
+      required: [pick, odds, edge, stake, profit, clv]
+      properties:
+        pick: { $ref: "#/components/schemas/Outcome" }
+        odds: { type: number, exclusiveMinimum: 1 }
+        edge: { type: number }
+        stake: { type: number, description: Units. Always 1 (flat staking). }
+        profit: { type: number, description: Units. }
+        clv:
+          type: [number, "null"]
+          description: Closing-line value, odds × p_close − 1. Null when no closing odds were found.
+
+    SettledFixture:
+      allOf:
+        - $ref: "#/components/schemas/MatchRef"
+        - type: object
+          required: [result, bet_status, outcomes, bet]
+          properties:
+            result: { $ref: "#/components/schemas/Outcome" }
+            bet_status: { $ref: "#/components/schemas/BetStatus" }
+            outcomes:
+              type: array
+              minItems: 2
+              maxItems: 3
+              items: { $ref: "#/components/schemas/FixtureOutcome" }
+            bet:
+              description: Null exactly when `bet_status` is `no_bet`.
+              oneOf:
+                - type: "null"
+                - $ref: "#/components/schemas/FixtureBet"
+
     Prediction:
       allOf:
         - $ref: "#/components/schemas/MatchRef"
@@ -618,14 +750,47 @@ components:
           type: [number, "null"]
           description: Share of bets with CLV > 0, among bets with closing odds.
 
+    LeagueMetrics:
+      allOf:
+        - type: object
+          required: [league]
+          properties:
+            league: { $ref: "#/components/schemas/League" }
+        - $ref: "#/components/schemas/Metrics"
+
+    EdgeBucketMetrics:
+      description: Metrics of the bets with `min_edge` < edge ≤ `max_edge`.
+      allOf:
+        - type: object
+          required: [min_edge, max_edge]
+          properties:
+            min_edge: { type: number }
+            max_edge:
+              type: [number, "null"]
+              description: Null for the last, open-ended bucket.
+        - $ref: "#/components/schemas/Metrics"
+
     ResultsSummary:
       type: object
-      required: [settled_matches, metrics, series]
+      required: [settled_matches, metrics, series, by_league, by_edge]
       properties:
         settled_matches:
           type: integer
           minimum: 0
-          description: Settled matches in the ledger, before the edge threshold.
+          description: Settled matches that pass the filters, before the edge threshold.
+        by_league:
+          type: array
+          maxItems: 16
+          description: The same metrics per league, leagues without a bet left out. Ordered by league.
+          items: { $ref: "#/components/schemas/LeagueMetrics" }
+        by_edge:
+          type: array
+          maxItems: 7
+          description: >-
+            The same metrics per edge bucket, buckets without a bet left out. The first bucket starts at the
+            request's `min_edge`, the next ones at the edge sweep's thresholds above it. Disjoint, unlike the
+            sweep's cumulative thresholds. Ordered by `min_edge`.
+          items: { $ref: "#/components/schemas/EdgeBucketMetrics" }
         metrics:
           oneOf:
             - type: "null"

@@ -163,6 +163,58 @@ class SettledBet(Pick):
     ]
 
 
+BetStatus = TypeAliasType(
+    "BetStatus",
+    Annotated[
+        Literal['won', 'lost', 'no_bet'],
+        Field(
+            description='`won` / `lost`: the pick at `min_edge` and how it ended. `no_bet`: no outcome cleared `min_edge`.'
+        ),
+    ],
+)
+
+
+class FixtureOutcome(BaseModel):
+    outcome: Outcome
+    p_model: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
+    p_market: Annotated[
+        StrictFloat,
+        Field(description='No-vig pre-match market probability.', ge=0.0, le=1.0),
+    ]
+    p_close: Annotated[
+        StrictFloat | None,
+        Field(
+            description='No-vig closing probability. Null when no closing odds were found.',
+            ge=0.0,
+            le=1.0,
+        ),
+    ]
+
+
+class FixtureBet(BaseModel):
+    pick: Outcome
+    odds: Annotated[StrictFloat, Field(gt=1.0)]
+    edge: StrictFloat
+    stake: Annotated[StrictFloat, Field(description='Units. Always 1 (flat staking).')]
+    profit: Annotated[StrictFloat, Field(description='Units.')]
+    clv: Annotated[
+        StrictFloat | None,
+        Field(
+            description='Closing-line value, odds × p_close − 1. Null when no closing odds were found.'
+        ),
+    ]
+
+
+class SettledFixture(MatchRef):
+    result: Outcome
+    bet_status: BetStatus
+    outcomes: Annotated[list[FixtureOutcome], Field(max_length=3, min_length=2)]
+    bet: Annotated[
+        FixtureBet | None,
+        Field(description='Null exactly when `bet_status` is `no_bet`.'),
+    ]
+
+
 class Outcome1(BaseModel):
     outcome: Outcome
     p_model: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
@@ -210,6 +262,17 @@ class Metrics(BaseModel):
     ]
 
 
+class LeagueMetrics(Metrics):
+    league: League
+
+
+class EdgeBucketMetrics(Metrics):
+    min_edge: StrictFloat
+    max_edge: Annotated[
+        StrictFloat | None, Field(description='Null for the last, open-ended bucket.')
+    ]
+
+
 class Series(BaseModel):
     date: date_aliased
     cumulative_profit: StrictFloat
@@ -225,8 +288,22 @@ class ResultsSummary(BaseModel):
     settled_matches: Annotated[
         StrictInt,
         Field(
-            description='Settled matches in the ledger, before the edge threshold.',
+            description='Settled matches that pass the filters, before the edge threshold.',
             ge=0,
+        ),
+    ]
+    by_league: Annotated[
+        list[LeagueMetrics],
+        Field(
+            description='The same metrics per league, leagues without a bet left out. Ordered by league.',
+            max_length=16,
+        ),
+    ]
+    by_edge: Annotated[
+        list[EdgeBucketMetrics],
+        Field(
+            description="The same metrics per edge bucket, buckets without a bet left out. The first bucket starts at the request's `min_edge`, the next ones at the edge sweep's thresholds above it. Disjoint, unlike the sweep's cumulative thresholds. Ordered by `min_edge`.",
+            max_length=7,
         ),
     ]
     metrics: Metrics | None
@@ -420,6 +497,10 @@ class PredictionPage(Page):
 
 class SettledBetPage(Page):
     items: list[SettledBet]
+
+
+class SettledFixturePage(Page):
+    items: list[SettledFixture]
 
 
 class EdgeSweepRow(Metrics):

@@ -4,6 +4,7 @@
 const en = {
   appTitle: "BET-Football",
   navPaper: "Paper trading",
+  navHistory: "History",
   navOptimizer: "Coupon optimizer",
   language: "Language",
   loading: "Loading…",
@@ -85,6 +86,32 @@ const en = {
   colAvgOdds: "Avg odds",
   colHit: "Hit rate",
 
+  // history
+  historyTitle: "History",
+  historyIntro:
+    "Every finished match in the ledger: the probability the model, the market before kick-off and the closing odds gave the result that happened, and how the pick at your threshold did. The samples are small: read ROI together with the number of bets.",
+  teamSearch: "Team",
+  teamSearchHelp: "Part of the name, in Latin letters as in the ledger.",
+  dateFrom: "From",
+  dateTo: "To",
+  historyNone: "No finished match fits these filters.",
+  mMatches: "Matches",
+  byLeague: "By league",
+  byEdge: "By edge",
+  settledFixtures: "Finished matches",
+  betStatus: "Bet",
+  status_all: "All",
+  status_won: "Won",
+  status_lost: "Lost",
+  status_no_bet: "No bet",
+  resultProbHelp:
+    "P model, P market and P closing are the probability each gave the result that happened (higher = closer). The Bet filter changes this table only, not the totals above.",
+  colPClose: "P closing",
+  pages: "Pages",
+  prev: "Previous",
+  next: "Next",
+  pageOf: "{from}–{to} of {total}",
+
   // optimizer
   optTitle: "Coupon optimizer",
   optWarning:
@@ -154,6 +181,7 @@ export type Key = keyof typeof en;
 const el: Record<Key, string> = {
   appTitle: "BET-Football",
   navPaper: "Paper trading",
+  navHistory: "Ιστορικό",
   navOptimizer: "Optimizer κουπονιού",
   language: "Γλώσσα",
   loading: "Φόρτωση…",
@@ -231,6 +259,31 @@ const el: Record<Key, string> = {
   colRoiSe: "ROI ± SE",
   colAvgOdds: "Μέση απόδοση",
   colHit: "Ποσοστό επιτυχίας",
+
+  historyTitle: "Ιστορικό",
+  historyIntro:
+    "Κάθε αγώνας του ledger που έχει λήξει: τι πιθανότητα έδιναν στο αποτέλεσμα που ήρθε το μοντέλο, η αγορά πριν τον αγώνα και τα closing odds, και πώς πήγε το pick στο όριο που διαλέγεις. Τα δείγματα είναι μικρά: διάβαζε το ROI μαζί με τον αριθμό των bets.",
+  teamSearch: "Ομάδα",
+  teamSearchHelp: "Μέρος του ονόματος, με λατινικούς χαρακτήρες όπως στο ledger.",
+  dateFrom: "Από",
+  dateTo: "Έως",
+  historyNone: "Κανένας αγώνας που έχει λήξει δεν ταιριάζει με τα φίλτρα.",
+  mMatches: "Αγώνες",
+  byLeague: "Ανά λίγκα",
+  byEdge: "Ανά edge",
+  settledFixtures: "Αγώνες που έληξαν",
+  betStatus: "Bet",
+  status_all: "Όλα",
+  status_won: "Κέρδισε",
+  status_lost: "Έχασε",
+  status_no_bet: "Χωρίς bet",
+  resultProbHelp:
+    "P μοντέλου, P αγοράς και P closing: η πιθανότητα που έδινε το καθένα στο αποτέλεσμα που ήρθε (μεγαλύτερη = πιο κοντά). Το φίλτρο «Bet» αλλάζει μόνο αυτόν τον πίνακα, όχι τα σύνολα πιο πάνω.",
+  colPClose: "P closing",
+  pages: "Σελίδες",
+  prev: "Προηγούμενη",
+  next: "Επόμενη",
+  pageOf: "{from}–{to} από {total}",
 
   optTitle: "Optimizer κουπονιού",
   optWarning:

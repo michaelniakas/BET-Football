@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Literal, Protocol
 
 import numpy as np
@@ -65,6 +65,15 @@ class Ledgers(Protocol):
     def read(self, strategy: str) -> pd.DataFrame: ...
 
 
+@dataclass(frozen=True)
+class MatchFilter:
+    """Which matches a results query looks at. A field left at None does not filter."""
+    leagues: list[str] | None = None
+    team: str | None = None                 # part of the home or away name, any case
+    date_from: date | None = None           # inclusive
+    date_to: date | None = None             # inclusive
+
+
 class LiveOdds(Protocol):
     ttl: timedelta
     quota: Quota | None
@@ -90,8 +99,20 @@ def _upcoming_unsettled(ledger: pd.DataFrame, spec: dict, today: pd.Timestamp) -
     return ledger[(ledger.date >= today) & ledger[spec["target"]].isna()]
 
 
-def _settled(ledger: pd.DataFrame, spec: dict) -> pd.DataFrame:
-    return ledger if ledger.empty else ledger[ledger[spec["target"]].notna()]
+def _settled(ledger: pd.DataFrame, spec: dict, where: MatchFilter = MatchFilter()) -> pd.DataFrame:
+    if ledger.empty:
+        return ledger
+    keep = ledger[spec["target"]].notna()
+    if where.leagues:
+        keep &= ledger.league.isin(where.leagues)
+    if where.team:
+        keep &= (ledger.home.str.contains(where.team, case=False, regex=False)
+                 | ledger.away.str.contains(where.team, case=False, regex=False))
+    if where.date_from:
+        keep &= ledger.date >= pd.Timestamp(where.date_from)
+    if where.date_to:
+        keep &= ledger.date <= pd.Timestamp(where.date_to)
+    return ledger[keep]
 
 
 def paginate(df: pd.DataFrame, sort: list[str], limit: int, offset: int) -> tuple[pd.DataFrame, int]:
@@ -174,23 +195,61 @@ def predictions(ledgers: Ledgers, strategy: str, book: str, leagues: list[str] |
     return out
 
 
-def _settled_bets(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None) -> tuple[pd.DataFrame, int]:
+def _settled_bets(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None,
+                  where: MatchFilter = MatchFilter()) -> tuple[pd.DataFrame, int]:
     cfg, market, spec = _strategy(strategy)
-    settled = _settled(ledgers.read(strategy), spec)
+    settled = _settled(ledgers.read(strategy), spec, where)
     edge = cfg["edge"] if min_edge is None else min_edge
     if settled.empty:
         return pd.DataFrame(), 0
     return backtest.find_bets(settled, book, edge, market), len(settled)
 
 
-def results_summary(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None) -> dict:
-    bets, n_settled = _settled_bets(ledgers, strategy, book, min_edge)
+def results_summary(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None,
+                    where: MatchFilter) -> dict:
+    bets, n_settled = _settled_bets(ledgers, strategy, book, min_edge, where)
     if bets.empty:
-        return {"settled_matches": n_settled, "metrics": None, "series": []}
+        return {"settled_matches": n_settled, "metrics": None, "series": [], "by_league": [], "by_edge": []}
     b = bets.sort_values(MATCH_KEY, kind="stable")
     series = pd.DataFrame({"date": b.date, "cumulative_profit": b.profit.cumsum(),
                            "mean_clv": b.clv.expanding().mean()})
-    return {"settled_matches": n_settled, "metrics": _metrics(bets), "series": series.to_dict("records")}
+    # Disjoint buckets (lo, hi] from the threshold up the sweep's thresholds; every bet has edge > threshold.
+    lo = _strategy(strategy)[0]["edge"] if min_edge is None else min_edge
+    bounds = [lo, *(e for e in SWEEP_EDGES if e > lo), np.inf]
+    bucket = pd.cut(bets.edge, bounds, labels=False)
+    return {
+        "settled_matches": n_settled, "metrics": _metrics(bets), "series": series.to_dict("records"),
+        "by_league": [{"league": lg, **_metrics(g)} for lg, g in bets.groupby("league")],
+        "by_edge": [{"min_edge": bounds[i], "max_edge": None if np.isinf(bounds[i + 1]) else bounds[i + 1],
+                     **_metrics(g)} for i, g in bets.groupby(bucket)],
+    }
+
+
+FIXTURE_COLS = MATCH_KEY + ["result", "bet_status", "outcomes"]
+BET_COLS = ["pick", "odds", "edge", "stake", "profit", "clv"]
+
+
+def settled_fixtures(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None, where: MatchFilter,
+                     bet_status: list[str] | None) -> pd.DataFrame:
+    """One row per settled fixture: probabilities per outcome, the result, and the bet `find_bets` places at
+    `min_edge` (BET_COLS, missing when it places none)."""
+    cfg, market, spec = _strategy(strategy)
+    settled = _settled(ledgers.read(strategy), spec, where)
+    if settled.empty:
+        return pd.DataFrame(columns=FIXTURE_COLS + BET_COLS)
+    bets = backtest.find_bets(settled, book, cfg["edge"] if min_edge is None else min_edge, market)
+    out = settled[MATCH_KEY].copy()
+    out["result"] = settled[spec["target"]]
+    out["outcomes"] = [
+        [{"outcome": o, "p_model": row[f"p_{o}"], "p_market": row[f"mkt_{s}"], "p_close": row[f"close_{s}"]}
+         for o, s in zip(spec["outcomes"], spec["suffixes"])]
+        for _, row in settled.iterrows()
+    ]
+    out = out.join(bets[BET_COLS])            # find_bets keeps the ledger's index
+    out["bet_status"] = np.where(out.pick.isna(), "no_bet", np.where(out.pick == out.result, "won", "lost"))
+    if bet_status:
+        out = out[out.bet_status.isin(bet_status)]
+    return out
 
 
 def settled_bets(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None) -> pd.DataFrame:

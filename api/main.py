@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -19,14 +20,15 @@ from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BeforeValidator
 from starlette.exceptions import HTTPException
 
 from model.paper import PAPER_DIR
 
 from . import usecases as uc
-from .contract import (Book, Catalog, EdgeSweep, Health, League, OptimizeRequest, OptimizeResponse,
+from .contract import (BetStatus, Book, Catalog, EdgeSweep, Health, League, OptimizeRequest, OptimizeResponse,
                        PickPage, PredictionPage, ProbabilityReport, ResultsSummary, SettledBetPage,
-                       SnapshotBook)
+                       SettledFixturePage, SnapshotBook)
 from .ledgers import GITHUB_MAIN, CsvLedgers, GithubLedgers
 from .odds import LiveOddsCache
 
@@ -50,6 +52,18 @@ MinEdge = Annotated[float | None, Query(ge=0, le=0.5)]
 Limit = Annotated[int, Query(ge=1, le=500)]
 Offset = Annotated[int, Query(ge=0)]
 Sort = Annotated[str | None, Query()]
+Leagues = Annotated[list[League] | None, Query()]
+Team = Annotated[str | None, Query(min_length=1, max_length=64)]
+
+
+def _full_date(v: str) -> str:
+    """The contract's `format: date`. pydantic alone also reads `0`, unix seconds and midnight datetimes as dates."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+        raise ValueError("expected YYYY-MM-DD")
+    return v
+
+
+Day = Annotated[date | None, BeforeValidator(_full_date)]
 
 
 class InvalidParameter(Exception):
@@ -190,8 +204,24 @@ def create_app(ledgers: uc.Ledgers, odds: uc.LiveOdds,
         return {"items": items, "total": total, "limit": limit, "offset": offset}
 
     @app.get(base + "/results/summary")
-    def results_summary(strategy: str, book: Book = "avg", min_edge: MinEdge = None) -> ResultsSummary:
-        return clean(uc.results_summary(ledgers, strategy, book, min_edge))
+    def results_summary(strategy: str, book: Book = "avg", min_edge: MinEdge = None, league: Leagues = None,
+                        team: Team = None, date_from: Day = None, date_to: Day = None) -> ResultsSummary:
+        where = uc.MatchFilter(league, team, date_from, date_to)
+        return clean(uc.results_summary(ledgers, strategy, book, min_edge, where))
+
+    @app.get(base + "/results/fixtures")
+    def results_fixtures(strategy: str, book: Book = "avg", min_edge: MinEdge = None, league: Leagues = None,
+                         team: Team = None, date_from: Day = None, date_to: Day = None,
+                         bet_status: Annotated[list[BetStatus] | None, Query()] = None, limit: Limit = 100,
+                         offset: Offset = 0, sort: Sort = None) -> SettledFixturePage:
+        keys = parse_sort(sort, _both("date", "edge", "profit", "clv"), ["-date"])
+        where = uc.MatchFilter(league, team, date_from, date_to)
+        page, total = uc.paginate(uc.settled_fixtures(ledgers, strategy, book, min_edge, where, bet_status),
+                                  keys, limit, offset)
+        items = [{**{k: r[k] for k in uc.FIXTURE_COLS},
+                  "bet": None if r["pick"] is None else {k: r[k] for k in uc.BET_COLS}}
+                 for r in records(page)]
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
 
     @app.get(base + "/results/bets")
     def results_bets(strategy: str, book: Book = "avg", min_edge: MinEdge = None, limit: Limit = 100,

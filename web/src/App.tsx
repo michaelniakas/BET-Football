@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, useApi } from "./api";
 import { formatter } from "./format";
-import { LANGS, translator, type Lang } from "./i18n";
+import { LANGS, translator, type Key, type Lang } from "./i18n";
+import { History } from "./pages/History";
 import { Optimizer } from "./pages/Optimizer";
 import { PaperTrading } from "./pages/PaperTrading";
 import { AppCtx, ErrorNote } from "./ui";
 
 // No router: the page and language live in the query string (?page=optimizer&lang=el).
-const PAGES = ["paper", "optimizer"] as const;
+const PAGES = ["paper", "history", "optimizer"] as const;
 type Page = (typeof PAGES)[number];
+const NAV: Record<Page, Key> = { paper: "navPaper", history: "navHistory", optimizer: "navOptimizer" };
 
 function fromUrl(): { page: Page; lang: Lang } {
   const q = new URLSearchParams(window.location.search);
@@ -30,7 +32,7 @@ export function App() {
   }, []);
   useEffect(() => {
     document.documentElement.lang = lang;
-    document.title = `${t(page === "paper" ? "navPaper" : "navOptimizer")} · ${t("appTitle")}`;
+    document.title = `${t(NAV[page])} · ${t("appTitle")}`;
   }, [lang, page, t]);
 
   const go = (next: { page?: Page; lang?: Lang }) => {
@@ -47,7 +49,7 @@ export function App() {
           {PAGES.map((p) => (
             <a key={p} href={`?page=${p}&lang=${lang}`} aria-current={p === page ? "page" : undefined}
                onClick={(e) => { e.preventDefault(); go({ page: p }); }}>
-              {t(p === "paper" ? "navPaper" : "navOptimizer")}
+              {t(NAV[p])}
             </a>
           ))}
         </nav>
@@ -66,7 +68,7 @@ export function App() {
           <p aria-busy="true">{t("loading")}</p>
         ) : (
           <AppCtx.Provider value={{ t, f, catalog: catalog.data }}>
-            {page === "paper" ? <PaperTrading /> : <Optimizer />}
+            {page === "paper" ? <PaperTrading /> : page === "history" ? <History /> : <Optimizer />}
           </AppCtx.Provider>
         )}
       </main>

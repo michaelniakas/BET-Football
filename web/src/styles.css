@@ -64,7 +64,7 @@ button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent);
 .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 12px 0; }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; border: none; padding: 0; margin: 0 0 8px; }
 .field label, .field legend { font-size: 0.9rem; font-weight: 500; padding: 0; }
-.field input[type="number"], .field select {
+.field input[type="number"], .field input[type="search"], .field input[type="date"], .field select {
   font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
   padding: 6px 8px;
 }
@@ -87,6 +87,9 @@ th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: le
 th { background: var(--panel); font-weight: 600; position: sticky; top: 0; }
 tbody tr:last-child td { border-bottom: none; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.narrow { max-width: 280px; }
+.pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 8px 0 16px; }
 
 details { margin: 12px 0; }
 summary { cursor: pointer; font-weight: 500; padding: 4px 0; }
