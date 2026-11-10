@@ -1,0 +1,2 @@
+-r requirements.txt
+anthropic==2.3.0              # news pilot (research/), runs locally, not in the image

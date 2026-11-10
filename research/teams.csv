@@ -1,0 +1,279 @@
+source,league,source_name,fd_name
+espn,B1,Anderlecht,Anderlecht
+espn,B1,Antwerp,Antwerp
+espn,B1,Cercle Brugge KSV,Cercle Brugge
+espn,B1,Club Brugge,Club Brugge
+espn,B1,KAA Gent,Gent
+espn,B1,KV Kortrijk,Kortrijk
+espn,B1,KV Mechelen,Mechelen
+espn,B1,KVC Westerlo,Westerlo
+espn,B1,Lommel SK,Lommel SK
+espn,B1,OH Leuven,Oud-Heverlee Leuven
+espn,B1,RAAL La Louvière,RAAL La Louviere
+espn,B1,Racing Genk,Genk
+espn,B1,Royal Charleroi SC,Charleroi
+espn,B1,Sint-Truidense,St Truiden
+espn,B1,Standard Liege,Standard
+espn,B1,Union St.-Gilloise,St. Gilloise
+espn,B1,Waasland-Beveren,Beveren
+espn,B1,Zulte-Waregem,Waregem
+espn,D1,1. FC Union Berlin,Union Berlin
+espn,D1,Bayer Leverkusen,Leverkusen
+espn,D1,Bayern Munich,Bayern Munich
+espn,D1,Borussia Dortmund,Dortmund
+espn,D1,Borussia Mönchengladbach,M'gladbach
+espn,D1,Eintracht Frankfurt,Ein Frankfurt
+espn,D1,FC Augsburg,Augsburg
+espn,D1,FC Cologne,FC Koln
+espn,D1,Hamburg SV,Hamburg
+espn,D1,Mainz,Mainz
+espn,D1,RB Leipzig,RB Leipzig
+espn,D1,SC Freiburg,Freiburg
+espn,D1,SC Paderborn 07,Paderborn
+espn,D1,SV Elversberg,Elversberg
+espn,D1,Schalke 04,Schalke 04
+espn,D1,TSG Hoffenheim,Hoffenheim
+espn,D1,VfB Stuttgart,Stuttgart
+espn,D1,Werder Bremen,Werder Bremen
+espn,D2,1. FC Heidenheim 1846,Heidenheim
+espn,D2,1. FC Magdeburg,Magdeburg
+espn,D2,1. FC Nürnberg,Nurnberg
+espn,D2,Arminia Bielefeld,Bielefeld
+espn,D2,Dynamo Dresden,Dresden
+espn,D2,Energie Cottbus,Cottbus
+espn,D2,Hannover 96,Hannover
+espn,D2,Hertha Berlin,Hertha
+espn,D2,Holstein Kiel,Holstein Kiel
+espn,D2,Kaiserslautern,Kaiserslautern
+espn,D2,Karlsruher SC,Karlsruhe
+espn,D2,SV Darmstadt 98,Darmstadt
+espn,D2,SpVgg Greuther Fürth,Greuther Furth
+espn,D2,St. Pauli,St Pauli
+espn,D2,TSV Eintracht Braunschweig,Braunschweig
+espn,D2,VfL Bochum,Bochum
+espn,D2,VfL Osnabruck,Osnabruck
+espn,D2,VfL Wolfsburg,Wolfsburg
+espn,E0,AFC Bournemouth,Bournemouth
+espn,E0,Arsenal,Arsenal
+espn,E0,Aston Villa,Aston Villa
+espn,E0,Brentford,Brentford
+espn,E0,Brighton & Hove Albion,Brighton
+espn,E0,Chelsea,Chelsea
+espn,E0,Coventry City,Coventry
+espn,E0,Crystal Palace,Crystal Palace
+espn,E0,Everton,Everton
+espn,E0,Fulham,Fulham
+espn,E0,Hull City,Hull
+espn,E0,Ipswich Town,Ipswich
+espn,E0,Leeds United,Leeds
+espn,E0,Liverpool,Liverpool
+espn,E0,Manchester City,Man City
+espn,E0,Manchester United,Man United
+espn,E0,Newcastle United,Newcastle
+espn,E0,Nottingham Forest,Nott'm Forest
+espn,E0,Sunderland,Sunderland
+espn,E0,Tottenham Hotspur,Tottenham
+espn,E1,Birmingham City,Birmingham
+espn,E1,Blackburn Rovers,Blackburn
+espn,E1,Bolton Wanderers,Bolton
+espn,E1,Bristol City,Bristol City
+espn,E1,Burnley,Burnley
+espn,E1,Cardiff City,Cardiff
+espn,E1,Charlton Athletic,Charlton
+espn,E1,Derby County,Derby
+espn,E1,Lincoln City,Lincoln
+espn,E1,Middlesbrough,Middlesbrough
+espn,E1,Millwall,Millwall
+espn,E1,Norwich City,Norwich
+espn,E1,Portsmouth,Portsmouth
+espn,E1,Preston North End,Preston
+espn,E1,Queens Park Rangers,QPR
+espn,E1,Sheffield United,Sheffield United
+espn,E1,Southampton,Southampton
+espn,E1,Stoke City,Stoke
+espn,E1,Swansea City,Swansea
+espn,E1,Watford,Watford
+espn,E1,West Bromwich Albion,West Brom
+espn,E1,West Ham United,West Ham
+espn,E1,Wolverhampton Wanderers,Wolves
+espn,E1,Wrexham,Wrexham
+espn,F1,AJ Auxerre,Auxerre
+espn,F1,AS Monaco,Monaco
+espn,F1,Angers,Angers
+espn,F1,Brest,Brest
+espn,F1,Le Havre AC,Le Havre
+espn,F1,Le Mans,Le Mans
+espn,F1,Lens,Lens
+espn,F1,Lille,Lille
+espn,F1,Lorient,Lorient
+espn,F1,Lyon,Lyon
+espn,F1,Marseille,Marseille
+espn,F1,Nice,Nice
+espn,F1,Paris FC,Paris FC
+espn,F1,Paris Saint-Germain,Paris SG
+espn,F1,Stade Rennais,Rennes
+espn,F1,Strasbourg,Strasbourg
+espn,F1,Toulouse,Toulouse
+espn,F1,Troyes,Troyes
+espn,F2,AS Nancy Lorraine,Nancy
+espn,F2,Annecy,Annecy
+espn,F2,Boulogne,Boulogne
+espn,F2,Clermont Foot,Clermont
+espn,F2,Dijon FCO,Dijon
+espn,F2,Dunkerque,Dunkerque
+espn,F2,Grenoble,Grenoble
+espn,F2,Guingamp,Guingamp
+espn,F2,Metz,Metz
+espn,F2,Montpellier,Montpellier
+espn,F2,Nantes,Nantes
+espn,F2,Pau,Pau FC
+espn,F2,Red Star FC 93,Red Star
+espn,F2,Rodez Aveyron,Rodez
+espn,F2,Saint-Étienne,St Etienne
+espn,F2,Sochaux,Sochaux
+espn,F2,Stade Laval,Laval
+espn,F2,Stade de Reims,Reims
+espn,G1,AEK Athens,AEK
+espn,G1,Aris,Aris
+espn,G1,Asteras Tripoli,Asteras Tripolis
+espn,G1,Atromitos,Atromitos
+espn,G1,Iraklis,Iraklis
+espn,G1,Kalamata,Kalamata
+espn,G1,Kifisia,Kifisia
+espn,G1,Levadiakos,Levadeiakos
+espn,G1,OFI Crete,OFI Crete
+espn,G1,Olympiacos,Olympiakos
+espn,G1,PAOK,PAOK
+espn,G1,Panathinaikos,Panathinaikos
+espn,G1,Panetolikos,Panetolikos
+espn,G1,Volos NFC,Volos NFC
+espn,I1,AC Milan,Milan
+espn,I1,AS Roma,Roma
+espn,I1,Atalanta,Atalanta
+espn,I1,Bologna,Bologna
+espn,I1,Cagliari,Cagliari
+espn,I1,Como,Como
+espn,I1,Fiorentina,Fiorentina
+espn,I1,Frosinone,Frosinone
+espn,I1,Genoa,Genoa
+espn,I1,Internazionale,Inter
+espn,I1,Juventus,Juventus
+espn,I1,Lazio,Lazio
+espn,I1,Lecce,Lecce
+espn,I1,Monza,Monza
+espn,I1,Napoli,Napoli
+espn,I1,Parma,Parma
+espn,I1,Sassuolo,Sassuolo
+espn,I1,Torino,Torino
+espn,I1,Udinese,Udinese
+espn,I1,Venezia,Venezia
+espn,I2,Arezzo,Arezzo
+espn,I2,Ascoli,Ascoli
+espn,I2,Benevento,Benevento
+espn,I2,Carrarese,Carrarese
+espn,I2,Catanzaro,Catanzaro
+espn,I2,Cesena,Cesena
+espn,I2,Cremonese,Cremonese
+espn,I2,Empoli,Empoli
+espn,I2,Hellas Verona,Verona
+espn,I2,Juve Stabia,Juve Stabia
+espn,I2,Mantova,Mantova
+espn,I2,Modena,Modena
+espn,I2,Padova,Padova
+espn,I2,Palermo,Palermo
+espn,I2,Pisa,Pisa
+espn,I2,Sampdoria,Sampdoria
+espn,I2,Sudtirol,Sudtirol
+espn,I2,US Avellino,Avellino
+espn,I2,Vicenza,Vicenza
+espn,I2,Virtus Entella,Virtus Entella
+espn,N1,ADO Den Haag,Den Haag
+espn,N1,AZ Alkmaar,AZ Alkmaar
+espn,N1,Ajax Amsterdam,Ajax
+espn,N1,Excelsior,Excelsior
+espn,N1,FC Groningen,Groningen
+espn,N1,FC Twente,Twente
+espn,N1,FC Utrecht,Utrecht
+espn,N1,Feyenoord Rotterdam,Feyenoord
+espn,N1,Fortuna Sittard,For Sittard
+espn,N1,Go Ahead Eagles,Go Ahead Eagles
+espn,N1,Heerenveen,Heerenveen
+espn,N1,NEC Nijmegen,Nijmegen
+espn,N1,PEC Zwolle,Zwolle
+espn,N1,PSV Eindhoven,PSV Eindhoven
+espn,N1,SC Cambuur,Cambuur
+espn,N1,Sparta Rotterdam,Sparta Rotterdam
+espn,N1,Telstar,Telstar
+espn,N1,Willem II,Willem II
+espn,SC0,Aberdeen,Aberdeen
+espn,SC0,Celtic,Celtic
+espn,SC0,Dundee,Dundee
+espn,SC0,Dundee United,Dundee United
+espn,SC0,Falkirk,Falkirk
+espn,SC0,Heart of Midlothian,Hearts
+espn,SC0,Hibernian,Hibernian
+espn,SC0,Kilmarnock,Kilmarnock
+espn,SC0,Motherwell,Motherwell
+espn,SC0,Rangers,Rangers
+espn,SC0,St Johnstone,St Johnstone
+espn,SC0,St Mirren,St Mirren
+espn,SP1,Alavés,Alaves
+espn,SP1,Athletic Club,Ath Bilbao
+espn,SP1,Atlético Madrid,Ath Madrid
+espn,SP1,Barcelona,Barcelona
+espn,SP1,Celta Vigo,Celta
+espn,SP1,Deportivo,La Coruna
+espn,SP1,Elche,Elche
+espn,SP1,Espanyol,Espanol
+espn,SP1,Getafe,Getafe
+espn,SP1,Levante,Levante
+espn,SP1,Málaga,Malaga
+espn,SP1,Osasuna,Osasuna
+espn,SP1,Racing Santander,Santander
+espn,SP1,Rayo Vallecano,Vallecano
+espn,SP1,Real Betis,Betis
+espn,SP1,Real Madrid,Real Madrid
+espn,SP1,Real Sociedad,Sociedad
+espn,SP1,Sevilla,Sevilla
+espn,SP1,Valencia,Valencia
+espn,SP1,Villarreal,Villarreal
+espn,SP2,Albacete,Albacete
+espn,SP2,Almería,Almeria
+espn,SP2,Burgos,Burgos
+espn,SP2,CD Sabadell,Sabadell
+espn,SP2,Castellón,Castellon
+espn,SP2,Ceuta,Ceuta
+espn,SP2,Cádiz,Cadiz
+espn,SP2,Córdoba,Cordoba
+espn,SP2,Eibar,Eibar
+espn,SP2,Eldense,Eldense
+espn,SP2,FC Andorra,Andorra
+espn,SP2,Girona,Girona
+espn,SP2,Granada,Granada
+espn,SP2,Las Palmas,Las Palmas
+espn,SP2,Leganés,Leganes
+espn,SP2,Mallorca,Mallorca
+espn,SP2,RC Celta Fortuna,Celta B
+espn,SP2,Real Oviedo,Oviedo
+espn,SP2,Real Sociedad II,Sociedad B
+espn,SP2,Real Valladolid,Valladolid
+espn,SP2,Sporting Gijón,Sp Gijon
+espn,SP2,Tenerife,Tenerife
+espn,T1,Alanyaspor,Alanyaspor
+espn,T1,Amed SFK,Amedspor
+espn,T1,Besiktas,Besiktas
+espn,T1,Caykur Rizespor,Rizespor
+espn,T1,Erzurum BB,Erzurumspor
+espn,T1,Eyupspor,Eyupspor
+espn,T1,Fenerbahce,Fenerbahce
+espn,T1,Galatasaray,Galatasaray
+espn,T1,Gaziantep FK,Gaziantep
+espn,T1,Genclerbirligi,Genclerbirligi
+espn,T1,Goztepe,Goztep
+espn,T1,Istanbul Basaksehir,Buyuksehyr
+espn,T1,Kasimpasa,Kasimpasa
+espn,T1,Kocaelispor,Kocaelispor
+espn,T1,Konyaspor,Konyaspor
+espn,T1,Samsunspor,Samsunspor
+espn,T1,Trabzonspor,Trabzonspor
+espn,T1,Çorum FK,Corum
