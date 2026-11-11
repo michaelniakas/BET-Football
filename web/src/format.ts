@@ -3,8 +3,6 @@ import type { Lang } from "./i18n";
 const LOCALE: Record<Lang, string> = { en: "en-GB", el: "el-GR" };
 const DASH = "–";
 
-export const PICK_LABELS: Record<string, string> = { H: "1", D: "X", A: "2", O: "Over 2.5", U: "Under 2.5" };
-
 export interface Fmt {
   /** Odds rounded *up* to 2 decimals: a minimum price shown rounded down would let a bet miss the edge. */
   minOdds: (x: number) => string;

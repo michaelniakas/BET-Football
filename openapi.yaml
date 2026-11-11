@@ -165,36 +165,6 @@ paths:
         "422": { $ref: "#/components/responses/ValidationFailed" }
         default: { $ref: "#/components/responses/Problem" }
 
-  /api/v1/strategies/{strategy}/results/bets:
-    get:
-      tags: [paper-trading]
-      operationId: listSettledBets
-      summary: The settled picks at `min_edge` / `book`.
-      parameters:
-        - $ref: "#/components/parameters/Strategy"
-        - $ref: "#/components/parameters/Book"
-        - $ref: "#/components/parameters/MinEdge"
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: sort
-          in: query
-          style: form
-          explode: false
-          schema:
-            type: array
-            uniqueItems: true
-            items: { enum: [date, -date, edge, -edge, profit, -profit, clv, -clv] }
-            default: [-date]
-      responses:
-        "200":
-          description: Page of settled bets.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/SettledBetPage" }
-        "404": { $ref: "#/components/responses/StrategyNotFound" }
-        "422": { $ref: "#/components/responses/ValidationFailed" }
-        default: { $ref: "#/components/responses/Problem" }
-
   /api/v1/strategies/{strategy}/results/fixtures:
     get:
       tags: [paper-trading]
@@ -497,16 +467,6 @@ components:
               type: array
               items: { $ref: "#/components/schemas/Prediction" }
 
-    SettledBetPage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items: { $ref: "#/components/schemas/SettledBet" }
-
     SettledFixturePage:
       allOf:
         - $ref: "#/components/schemas/Page"
@@ -679,28 +639,17 @@ components:
       allOf:
         - $ref: "#/components/schemas/MatchRef"
         - type: object
-          required: [pick, odds, p_model, edge]
+          required: [pick, odds, p_model, edge, min_odds]
           properties:
             pick: { $ref: "#/components/schemas/Outcome" }
             odds: { type: number, exclusiveMinimum: 1 }
             p_model: { type: number, minimum: 0, maximum: 1 }
             edge: { type: number }
-
-    SettledBet:
-      allOf:
-        - $ref: "#/components/schemas/Pick"
-        - type: object
-          required: [result, stake, profit, p_close, clv]
-          properties:
-            result: { $ref: "#/components/schemas/Outcome" }
-            stake: { type: number, description: Units. Always 1 (flat staking). }
-            profit: { type: number, description: Units. }
-            p_close:
-              type: [number, "null"]
-              description: No-vig closing probability of the picked outcome. Null when no closing odds were found.
-            clv:
-              type: [number, "null"]
-              description: Closing-line value, odds × p_close − 1.
+            min_odds:
+              type: number
+              description: >-
+                Lowest odds at which this pick still meets `min_edge`: `(1 + min_edge) / p_model`.
+                Bet at these odds or better, at any bookmaker.
 
     BetStatus:
       description: "`won` / `lost`: the pick at `min_edge` and how it ended. `no_bet`: no outcome cleared `min_edge`."

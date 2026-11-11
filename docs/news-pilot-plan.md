@@ -39,7 +39,7 @@ Ledger of the pilot goes to `main` next to the paper ledgers only if the user as
 probability, result, the pick at min_edge (if any), odds, profit, CLV; filters league, team search, date range,
 outcome (won / lost / no bet); breakdown by league and edge bucket; EN/EL.
 
-- Read `/results/bets` and `/results/summary` first: extend them (filters, a search param, a by-league breakdown)
+- Read `/results/fixtures` and `/results/summary` first: extend them (filters, a search param, a by-league breakdown)
   before adding an endpoint. Contract first in `openapi.yaml`, same pagination/sort convention as the rest.
 - News notes appear on the page only once they live in Postgres (Phase 3).
 - **Check**: contract + endpoint tests on both ledger implementations, values computed independently in the test

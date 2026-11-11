@@ -65,6 +65,11 @@ an explicit button press (a slider change after the 10 min cache would otherwise
 odds re-run on every change. Bundle 197 kB gzipped (recharts), not split. Checked by hand in Chrome on the fixture
 ledgers: both pages, both languages, tables, metrics, both charts, no console errors.
 
+**Redesign (2026-11-11)**, per mockup v2: pages Picks / Results / Coupon / Explained (old `paper`, `history`,
+`optimizer` links redirect), light/dark, EN/EL. recharts removed (charts are hand-drawn SVG); fonts via `@fontsource`
+(Barlow Condensed, Fira Sans Condensed for Greek, Inter). Bundle 99 kB gzipped JS + 7 kB CSS. `/results/bets` deleted
+(the UI reads `/results/fixtures`; the golden check moved there). `Pick.min_odds` added so the UI does not recompute it.
+
 ### Phase 3: Job on Toft
 - Postgres service (volume + backups); schema with constraints, e.g. `UNIQUE (strategy, match_date, home, away)`; reversible migration.
 - One-off CSV → Postgres import; `LedgerRepository` Postgres implementation.

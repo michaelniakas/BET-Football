@@ -158,7 +158,12 @@ def catalog(ledgers: Ledgers, odds: LiveOdds) -> dict:
 
 # --------------------------------------------------------------------------- paper trading
 
-PICK_COLS = ["date", "league", "home", "away", "pick", "odds", "p_model", "edge"]
+PICK_COLS = ["date", "league", "home", "away", "pick", "odds", "p_model", "edge", "min_odds"]
+
+
+def _min_odds(p_model: pd.Series, min_edge: float) -> pd.Series:
+    """The price at which a selection's edge (odds * p_model - 1) equals `min_edge`; bet at it or better."""
+    return (1 + min_edge) / p_model
 
 
 def picks(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None, today: pd.Timestamp) -> pd.DataFrame:
@@ -167,7 +172,8 @@ def picks(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None, to
     edge = cfg["edge"] if min_edge is None else min_edge
     if upcoming.empty:
         return pd.DataFrame(columns=PICK_COLS)
-    return backtest.find_bets(upcoming, book, edge, market)[PICK_COLS]
+    bets = backtest.find_bets(upcoming, book, edge, market)
+    return bets.assign(min_odds=_min_odds(bets.p_model, edge))[PICK_COLS]
 
 
 def predictions(ledgers: Ledgers, strategy: str, book: str, leagues: list[str] | None,
@@ -251,12 +257,6 @@ def settled_fixtures(ledgers: Ledgers, strategy: str, book: str, min_edge: float
     if bet_status:
         out = out[out.bet_status.isin(bet_status)]
     return out
-
-
-def settled_bets(ledgers: Ledgers, strategy: str, book: str, min_edge: float | None) -> pd.DataFrame:
-    cols = PICK_COLS + ["result", "stake", "profit", "p_close", "clv"]
-    bets, _ = _settled_bets(ledgers, strategy, book, min_edge)
-    return bets[cols] if not bets.empty else pd.DataFrame(columns=cols)
 
 
 def edge_sweep(ledgers: Ledgers, strategy: str, book: str) -> list[dict]:
@@ -381,7 +381,7 @@ def optimize(ledgers: Ledgers, odds: LiveOdds, budget: float, markets: list[str]
     if legs.empty:
         return result
 
-    legs = legs.assign(min_odds=(1 + min_edge) / legs.p_model)
+    legs = legs.assign(min_odds=_min_odds(legs.p_model, min_edge))
     result["legs"] = legs[MATCH_KEY + ["market", "outcome", "odds", "bookmaker", "p_model", "p_market", "edge",
                                        "min_odds"]].to_dict("records")
     for sid, sc in opt.scenarios(len(legs)).items():

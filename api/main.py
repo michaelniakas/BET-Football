@@ -27,7 +27,7 @@ from model.paper import PAPER_DIR
 
 from . import usecases as uc
 from .contract import (BetStatus, Book, Catalog, EdgeSweep, Health, League, OptimizeRequest, OptimizeResponse,
-                       PickPage, PredictionPage, ProbabilityReport, ResultsSummary, SettledBetPage,
+                       PickPage, PredictionPage, ProbabilityReport, ResultsSummary,
                        SettledFixturePage, SnapshotBook)
 from .ledgers import GITHUB_MAIN, CsvLedgers, GithubLedgers, PostgresLedgers
 from .odds import LiveOddsCache
@@ -222,13 +222,6 @@ def create_app(ledgers: uc.Ledgers, odds: uc.LiveOdds,
                   "bet": None if r["pick"] is None else {k: r[k] for k in uc.BET_COLS}}
                  for r in records(page)]
         return {"items": items, "total": total, "limit": limit, "offset": offset}
-
-    @app.get(base + "/results/bets")
-    def results_bets(strategy: str, book: Book = "avg", min_edge: MinEdge = None, limit: Limit = 100,
-                     offset: Offset = 0, sort: Sort = None) -> SettledBetPage:
-        keys = parse_sort(sort, _both("date", "edge", "profit", "clv"), ["-date"])
-        page, total = uc.paginate(uc.settled_bets(ledgers, strategy, book, min_edge), keys, limit, offset)
-        return {"items": records(page), "total": total, "limit": limit, "offset": offset}
 
     @app.get(base + "/results/edge-sweep")
     def edge_sweep(strategy: str, book: Book = "avg") -> EdgeSweep:

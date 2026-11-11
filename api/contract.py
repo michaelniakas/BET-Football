@@ -181,20 +181,11 @@ class Pick(MatchRef):
     odds: Annotated[StrictFloat, Field(gt=1.0)]
     p_model: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
     edge: StrictFloat
-
-
-class SettledBet(Pick):
-    result: Outcome
-    stake: Annotated[StrictFloat, Field(description='Units. Always 1 (flat staking).')]
-    profit: Annotated[StrictFloat, Field(description='Units.')]
-    p_close: Annotated[
-        StrictFloat | None,
+    min_odds: Annotated[
+        StrictFloat,
         Field(
-            description='No-vig closing probability of the picked outcome. Null when no closing odds were found.'
+            description='Lowest odds at which this pick still meets `min_edge`: `(1 + min_edge) / p_model`. Bet at these odds or better, at any bookmaker.'
         ),
-    ]
-    clv: Annotated[
-        StrictFloat | None, Field(description='Closing-line value, odds × p_close − 1.')
     ]
 
 
@@ -523,10 +514,6 @@ class PickPage(Page):
 
 class PredictionPage(Page):
     items: list[Prediction]
-
-
-class SettledBetPage(Page):
-    items: list[SettledBet]
 
 
 class EdgeSweepRow(Metrics):

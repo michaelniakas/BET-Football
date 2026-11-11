@@ -13,6 +13,7 @@ from api.ledgers import CsvLedgers
 from api.main import create_app
 from api.odds import LiveOddsCache
 from api.usecases import SWEEP_EDGES
+from model.paper import STRATEGIES
 from tests.conftest import FakeOddsHttp, FakeResponse, odds_events
 
 S = "/api/v1/strategies"
@@ -97,6 +98,20 @@ def test_picks(client):
     assert len(all_items(client, f"{S}/ou25/picks?min_edge=0.5")) == 0
 
 
+@pytest.mark.parametrize("edge", [0.0, 0.005])
+def test_pick_min_odds_is_the_price_at_min_edge(client, edge):
+    items = all_items(client, f"{S}/ou25/picks?min_edge={edge}")
+    assert items
+    for i in items:
+        assert i["min_odds"] == pytest.approx((1 + edge) / i["p_model"]) and i["odds"] >= i["min_odds"]
+
+
+def test_pick_min_odds_uses_the_strategy_edge_by_default(client, monkeypatch):
+    monkeypatch.setitem(STRATEGIES["1x2"], "edge", 0.01)        # fixture picks top out below the real defaults
+    items = all_items(client, f"{S}/1x2/picks")
+    assert items and all(i["min_odds"] == pytest.approx(1.01 / i["p_model"]) for i in items)
+
+
 def test_picks_default_edge_is_the_strategy_edge(client):
     default = client.get(f"{S}/1x2/picks").json()["total"]
     assert default == client.get(f"{S}/1x2/picks?min_edge=0.05").json()["total"]
@@ -144,7 +159,7 @@ def test_invalid_league(client):
     problem(client.get(f"{S}/ou25/predictions?league=XX"), 422, "validation_failed")
 
 
-@pytest.mark.parametrize("path", ["picks", "predictions", "results/summary", "results/bets", "results/fixtures",
+@pytest.mark.parametrize("path", ["picks", "predictions", "results/summary", "results/fixtures",
                                   "results/edge-sweep", "results/probability-report"])
 def test_unknown_strategy(client, path):
     problem(client.get(f"{S}/nope/{path}"), 404, "strategy_not_found")
@@ -158,19 +173,6 @@ def test_results_summary(client):
     assert s["series"][-1]["cumulative_profit"] == pytest.approx(s["metrics"]["profit"])
     assert s["series"][-1]["mean_clv"] == pytest.approx(s["metrics"]["clv"])
     assert client.get(f"{S}/ou25/results/summary?min_edge=0.5").json()["metrics"] is None
-
-
-def test_settled_bets(client):
-    bets = all_items(client, f"{S}/1x2/results/bets?min_edge=0")
-    assert bets and all(b["stake"] == 1 for b in bets)
-    assert all(b["profit"] == pytest.approx(b["odds"] - 1 if b["pick"] == b["result"] else -1) for b in bets)
-    assert [b["date"] for b in bets] == sorted((b["date"] for b in bets), reverse=True)   # default: -date
-
-
-def test_settled_bets_without_closing_odds_have_null_clv(client):
-    bets = all_items(client, f"{S}/ou25/results/bets?min_edge=0")
-    no_close = [b for b in bets if b["p_close"] is None]
-    assert all(b["clv"] is None for b in no_close)
 
 
 def test_edge_sweep(client):

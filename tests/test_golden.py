@@ -116,7 +116,12 @@ def test_paper_trading(client, book, edge):
 
         # settled picks, metrics, probability report, edge sweep
         bets = tab["bets"]
-        api = items(client, f"{base}/results/bets{q}")
+        fx = items(client, f"{base}/results/fixtures{q}&bet_status=won&bet_status=lost")
+        api = fx[KEY + ["result"]].copy() if not fx.empty else pd.DataFrame(columns=KEY)
+        for i, row in fx.iterrows():
+            for k in ("pick", "odds", "edge", "profit", "clv"):
+                api.loc[i, k] = row.bet[k]
+            api.loc[i, "p_model"] = next(o["p_model"] for o in row.outcomes if o["outcome"] == row.bet["pick"])
         assert_same_rows(bets if bets is not None else pd.DataFrame(columns=KEY), api,
                          ["pick", "odds", "p_model", "edge", "result", "profit", "clv"])
 
