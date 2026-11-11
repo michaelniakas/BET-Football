@@ -2,7 +2,8 @@ import { useId, useState } from "react";
 import { api, useApi, type Schemas } from "../api";
 import { PnlHistogram } from "../charts";
 import { PICK_LABELS } from "../format";
-import { Loaded, matchCols, matchKey, Metric, MultiCheck, Note, Select, Slider, Table, Tabs, useCtx } from "../ui";
+import { League as LeagueLabel, leagueName, Loaded, matchCols, matchKey, Metric, MultiCheck, Note, Select, Slider,
+         Table, Tabs, useCtx } from "../ui";
 
 type Market = Schemas["Market"];
 type League = Schemas["League"];
@@ -91,7 +92,7 @@ export function Optimizer() {
             <>
               <MultiCheck legend={t("liveLeagues")} value={leagues}
                           onChange={(v) => { setLiveLeagues(v); setBookmakers(null); }}
-                          options={available.map((l) => ({ value: l, label: l }))}
+                          options={available.map((l) => ({ value: l, label: <LeagueLabel id={l} /> }))}
                           help={t("liveLeaguesHelp", { min: Math.round(catalog.live_odds.ttl_seconds / 60) })} />
               {live.data?.live && (
                 <MultiCheck legend={t("bookmakers")} help={t("bookmakersHelp")}
@@ -120,13 +121,14 @@ export function Optimizer() {
 }
 
 function LiveInfo({ live }: { live: NonNullable<OptRes["live"]> }) {
-  const { t, f } = useCtx();
+  const { t, f, catalog } = useCtx();
   const unmatched = live.leagues.flatMap((l) => l.unmatched);
   return (
     <div className="caption">
       {live.leagues.map((l) => (
         <p key={l.league}>
-          {t("liveInfo", { league: l.league, at: f.dateTime(l.fetched_at), events: l.events, matched: l.matched })}
+          {t("liveInfo", { league: leagueName(catalog, l.league), at: f.dateTime(l.fetched_at), events: l.events,
+                           matched: l.matched })}
         </p>
       ))}
       {live.quota && <p>{t("creditsLeft", { n: live.quota.remaining })}</p>}

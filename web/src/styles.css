@@ -88,6 +88,9 @@ th { background: var(--panel); font-weight: 600; position: sticky; top: 0; }
 tbody tr:last-child td { border-bottom: none; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 
+.league { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
+.league img { display: block; width: 18px; height: 18px; object-fit: contain; }
+
 .narrow { max-width: 280px; }
 .pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 8px 0 16px; }
 

@@ -1,7 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { api, useApi, type Schemas } from "../api";
 import { PICK_LABELS } from "../format";
-import { Loaded, matchCols, matchKey, Metric, MultiCheck, Note, Select, Slider, Table, Tabs, useCtx,
+import { League, Loaded, matchCols, matchKey, Metric, MultiCheck, Note, Select, Slider, Table, Tabs, useCtx,
          type Column } from "../ui";
 
 type Strategy = Schemas["Strategy"];
@@ -111,7 +111,8 @@ function StrategyHistory({ s }: { s: Strategy }) {
         <Input label={t("dateTo")} type="date" value={to} onChange={setTo} />
       </div>
       <MultiCheck legend={`${t("leagues")} (${leagues.length ? leagues.length : t("all")})`}
-                  options={s.leagues.map((l) => ({ value: l, label: l }))} value={leagues} onChange={setLeagues} />
+                  options={s.leagues.map((l) => ({ value: l, label: <League id={l} /> }))} value={leagues}
+                  onChange={setLeagues} />
 
       <Loaded state={summary}>
         {(sum) => {
@@ -131,7 +132,7 @@ function StrategyHistory({ s }: { s: Strategy }) {
                     <Metric label={t("mBeatClose")} value={f.pct(m.beat_close_rate, 0)} />
                   </div>
                   <Table caption={t("byLeague")} rows={sum.by_league} rowKey={(x) => x.league} cols={[
-                    { label: t("colLeague"), cell: (x) => x.league },
+                    { label: t("colLeague"), cell: (x) => <League id={x.league} /> },
                     ...metricCols<Schemas["LeagueMetrics"]>(),
                   ]} />
                   <Table caption={t("byEdge")} rows={sum.by_edge} rowKey={(x) => String(x.min_edge)} cols={[

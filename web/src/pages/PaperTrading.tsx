@@ -2,7 +2,8 @@ import { useState } from "react";
 import { api, useApi, type Schemas } from "../api";
 import { CumulativeChart } from "../charts";
 import { PICK_LABELS } from "../format";
-import { Loaded, matchCols, matchKey, Metric, MultiCheck, Note, Select, Slider, Table, Tabs, useCtx } from "../ui";
+import { League, Loaded, matchCols, matchKey, Metric, MultiCheck, Note, Select, Slider, Table, Tabs,
+         useCtx } from "../ui";
 
 type Strategy = Schemas["Strategy"];
 type Book = Schemas["Book"];
@@ -93,7 +94,7 @@ function Predictions({ s, book }: { s: Strategy; book: Book }) {
           return (
             <>
               <MultiCheck legend={`${t("leagues")} (${leagues.length ? leagues.length : t("all")})`}
-                          options={present.map((l) => ({ value: l, label: l }))} value={leagues}
+                          options={present.map((l) => ({ value: l, label: <League id={l} /> }))} value={leagues}
                           onChange={setLeagues} />
               <p className="caption">{t("predictionsHelp")}</p>
               {page.total > page.items.length && (

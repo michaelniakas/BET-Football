@@ -17,6 +17,48 @@ export function useCtx(): Ctx {
   return ctx;
 }
 
+// --------------------------------------------------------------------------- leagues
+
+type LeagueId = Schemas["League"];
+
+// A league the contract adds without an entry here is a type error.
+const FLAG: Record<LeagueId, string> = {
+  E0: "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",       // England (emoji tag sequence)
+  E1: "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+  SC0: "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}",      // Scotland
+  D1: "🇩🇪", D2: "🇩🇪", I1: "🇮🇹", I2: "🇮🇹", SP1: "🇪🇸", SP2: "🇪🇸", F1: "🇫🇷", F2: "🇫🇷",
+  N1: "🇳🇱", P1: "🇵🇹", B1: "🇧🇪", T1: "🇹🇷", G1: "🇬🇷",
+};
+// ESPN's league ids (the `logos` of site.api.espn.com/apis/site/v2/sports/soccer/<slug>/scoreboard).
+// ponytail: hot-linked from ESPN's CDN, undocumented; a logo that fails to load is hidden. Bundle the
+// images if they start moving.
+const ESPN_LOGO: Record<LeagueId, number> = {
+  E0: 23, E1: 24, D1: 10, D2: 97, I1: 12, I2: 99, SP1: 15, SP2: 107, F1: 9, F2: 96, N1: 11, P1: 14, B1: 6, T1: 18,
+  G1: 98, SC0: 45,
+};
+const NO_DARK_LOGO: readonly LeagueId[] = ["D2", "I2", "G1"];
+const logoUrl = (id: LeagueId, dir: string) =>
+  `https://a.espncdn.com/combiner/i?img=/i/leaguelogos/soccer/${dir}/${ESPN_LOGO[id]}.png&w=40&h=40&transparent=true`;
+
+export const leagueName = (catalog: Schemas["Catalog"], id: LeagueId) =>
+  catalog.leagues.find((l) => l.id === id)?.name ?? id;
+
+/** Flag, logo and name of a league. The flag and logo are decoration: the name carries the meaning. */
+export function League({ id }: { id: LeagueId }) {
+  const { catalog } = useCtx();
+  return (
+    <span className="league">
+      <span aria-hidden="true">{FLAG[id]}</span>
+      <picture>
+        {!NO_DARK_LOGO.includes(id) && <source media="(prefers-color-scheme: dark)" srcSet={logoUrl(id, "500-dark")} />}
+        <img src={logoUrl(id, "500")} alt="" width={18} height={18} loading="lazy" referrerPolicy="no-referrer"
+             onError={(e) => { e.currentTarget.parentElement!.hidden = true; }} />
+      </picture>
+      {leagueName(catalog, id)}
+    </span>
+  );
+}
+
 // --------------------------------------------------------------------------- tables
 
 export interface Column<R> {
@@ -64,7 +106,7 @@ export function Table<R>({ rows, cols, rowKey, caption }: {
 export function matchCols<R extends Schemas["MatchRef"]>(t: T, f: Fmt): Column<R>[] {
   return [
     { label: t("colDate"), cell: (r) => f.date(r.date) },
-    { label: t("colLeague"), cell: (r) => r.league },
+    { label: t("colLeague"), cell: (r) => <League id={r.league} /> },
     { label: t("colHome"), cell: (r) => r.home },
     { label: t("colAway"), cell: (r) => r.away },
   ];
@@ -162,7 +204,7 @@ export function Select<V extends string>({ label, value, options, onChange, help
 /** Checkbox group: the selected values, in the order of `options`. */
 export function MultiCheck<V extends string>({ legend, options, value, onChange, help }: {
   legend: string;
-  options: { value: V; label: string }[];
+  options: { value: V; label: ReactNode }[];
   value: V[];
   onChange: (v: V[]) => void;
   help?: string;
