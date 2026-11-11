@@ -22,6 +22,15 @@ Every record has `researched_at` before kick-off, plus model id and prompt versi
 | 4. Research call per fixture: `claude-opus-5-5`, `web_search_20260209` (max_uses 15, measured 2026-11-09: at 5 the model ran out and reported no news; prompt caching on, $0.36 per fixture vs $0.92 without, one sample) + Google News RSS headlines in the prompt, answer through one strict tool: absences, rotation risk, motivation, p_H/p_D/p_A, confidence, sources (URLs), note_en, note_el. Run 3 fixtures, measure real cost, extrapolate, then the rest under the cap. Output `research/news_1x2.csv` keyed (date, league, home, away). | Cost per fixture from usage; 3 outputs read by hand; cap stops the run; researched_at < kick-off for every row. |
 | 5. `research/evaluate.py`: once settled, join with `ledger_1x2` -> log loss / Brier for news vs model vs market pre-match vs closing, CLV of news picks. | Runs on the first settled fixtures, SP2 13-16 Nov (numbers, no claims: n is tiny). |
 
+**International games (added 2026-11-11, user approved)**: ESPN lists 93 for 12-18 Nov (52 Nations League,
+41 friendlies). No model covers national teams (football-data has no such files), so Claude's p_* are the only
+prediction. `research/intl.py`: snapshot of The Odds API 1X2 prices, research only the games that have odds
+(`research.news --intl`, same prompt v1, `research/news_intl.csv`), then paper bets at edge > 5% at the average
+price of the last snapshot before the research finished (a later one may know the line-ups), settled from ESPN's
+final scores. Cap
+$110 total for both runs (spend.csv is shared, so the club run uses `--cap 110` too); the international run goes
+first, its games start 12 Nov 17:00 UTC. Not in the app. About 90 games say nothing about skill.
+
 Ledger of the pilot goes to `main` next to the paper ledgers only if the user asks (the app reads `main`).
 
 ## Part B: History page (after the pilot)

@@ -12,14 +12,17 @@ SLUGS = {
 }
 URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
 assert set(SLUGS) == set(LEAGUES)
+# National teams: no football-data files, so no model and no teams.csv mapping.
+INTL = {"UNL": "uefa.nations", "FRI": "fifa.friendly"}
+INTL_NAMES = {"UNL": "UEFA Nations League", "FRI": "International friendly"}
 
 
-def fixtures(first: dt.date, last: dt.date) -> list[dict]:
+def fixtures(first: dt.date, last: dt.date, slugs: dict[str, str] = SLUGS) -> list[dict]:
     """Not-yet-started games with first <= kick-off date (UTC) <= last, one per ESPN event."""
     session = requests.Session()
     found = {}
     days = [first + dt.timedelta(i) for i in range((last - first).days + 1)]
-    for league, slug in SLUGS.items():
+    for league, slug in slugs.items():
         for day in days:  # ESPN answers 400 to a date range on this endpoint
             r = session.get(URL.format(slug=slug), params={"dates": day.strftime("%Y%m%d")}, timeout=30)
             r.raise_for_status()

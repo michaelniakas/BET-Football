@@ -1,6 +1,7 @@
 """Per-fixture news research with Claude, under a hard spending cap.
 
     python -m research.news 2026-11-13 2026-11-23 --cap 50
+    python -m research.news 2026-11-12 2026-11-18 --intl --cap 110   # national teams, see research/intl.py
 
 Every API response is charged to research/spend.csv (it survives restarts, so the cap covers all runs).
 Finished fixtures are appended to --out and skipped on a re-run.
@@ -20,7 +21,7 @@ import anthropic
 import requests
 
 from model.data import LEAGUES
-from research.espn import fixtures
+from research.espn import INTL, INTL_NAMES, SLUGS, fixtures
 
 HERE = pathlib.Path(__file__).parent
 MODEL = "claude-opus-5-5"
@@ -180,7 +181,7 @@ def research(client: anthropic.Anthropic, budget: Budget, f: dict) -> dict:
     now = dt.datetime.now(dt.timezone.utc)
     news = "\n".join(headlines(f["home"], f["away"], now)) or "(none found)"
     messages = [{"role": "user", "content": (
-        f"Fixture: {f['home']} v {f['away']} ({LEAGUES[f['league']]})\n"
+        f"Fixture: {f['home']} v {f['away']} ({(LEAGUES | INTL_NAMES)[f['league']]})\n"
         f"Kick-off: {f['kickoff'].isoformat()}\nNow: {now.isoformat()}\n\n"
         f"<headlines untrusted=\"true\">\n{news}\n</headlines>"
     )}]
@@ -226,9 +227,11 @@ def main() -> int:
     ap.add_argument("last", type=dt.date.fromisoformat)
     ap.add_argument("--cap", type=float, required=True, help="total USD across all runs")
     ap.add_argument("--events", nargs="*", help="only these ESPN event ids")
-    ap.add_argument("--out", type=pathlib.Path, default=HERE / "news_1x2.csv")
+    ap.add_argument("--out", type=pathlib.Path)
+    ap.add_argument("--intl", action="store_true", help="national teams (ESPN names, no ledger) instead of the leagues")
     ap.add_argument("--workers", type=int, default=4)  # sequential would take hours; the deadline is one day
     args = ap.parse_args()
+    args.out = args.out or HERE / ("news_intl.csv" if args.intl else "news_1x2.csv")
 
     with (HERE / "teams.csv").open() as fh:
         names = {(r["league"], r["source_name"]): r["fd_name"] for r in csv.DictReader(fh)}
@@ -236,8 +239,10 @@ def main() -> int:
     if args.out.exists():
         with args.out.open() as fh:
             done = {r["event_id"] for r in csv.DictReader(fh)}
-    todo = [f for f in fixtures(args.first, args.last)
+    todo = [f for f in fixtures(args.first, args.last, INTL if args.intl else SLUGS)
             if f["event_id"] not in done and (not args.events or f["event_id"] in args.events)]
+    if args.intl:
+        names |= {(f["league"], f[side]): f[side] for f in todo for side in ("home", "away")}
     keys = [{"fd_home": names[f["league"], f["home"]], "fd_away": names[f["league"], f["away"]]} for f in todo]
 
     client = anthropic.Anthropic(max_retries=4)

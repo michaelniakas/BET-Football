@@ -109,6 +109,11 @@ directory it mounts on; `DATABASE_URL` is set by hand, host = the add-on's netwo
 - Rollback: `python -m api.sync export DIR` on the worker, commit the CSVs to `main`, re-enable the workflow, remove
   `DATABASE_URL` from `bet-app`, stop the worker.
 
+**Cutover done (2026-11-11)**: worker `bet-app-worker` (volume `worker-data` on `/data`, 1G), Postgres add-on
+`bet-app-db`; import added 96 + 290; slot 2026-11-10 run at 11:37 UTC (0 added, as GitHub's run); `bet-app` reads
+Postgres (catalog 96 / 290); `paper-trading` workflow disabled on GitHub. Toft docs page "Paper trading worker" has a
+status query and `python -m api.worker once` as Run buttons. First scheduled run: 2026-11-13 07:00 UTC.
+
 **Running the worker**
 - One run per slot, as the workflow: a job that ends with a non-zero exit (one strategy crashed) is saved and not
   repeated. A run that could not finish (database or disk error, the job killed by the 30 min timeout) writes
