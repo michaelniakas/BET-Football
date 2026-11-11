@@ -1,6 +1,7 @@
 """Endpoint behaviour on the fixture ledgers. Every call is also checked against openapi.yaml (conftest)."""
 from __future__ import annotations
 
+import math
 from urllib.parse import quote
 
 import pandas as pd
@@ -184,6 +185,68 @@ def test_probability_report(client):
     assert [r["source"] for r in rep["rows"]] == ["model", "market_pre_match", "market_closing"]
 
 
+def expected_report(ledger_dir, strategy: str) -> dict:
+    """Favourite hit rate, model-closer rate, calibration and per-league scores, row by row (no model.backtest)."""
+    outcomes, suffixes, target = LEDGER_COLS[strategy]
+    sources = {"model": [f"p_{o}" for o in outcomes], "market_pre_match": [f"mkt_{s}" for s in suffixes],
+               "market_closing": [f"close_{s}" for s in suffixes]}
+    rows = [r for r in pd.read_csv(ledger_dir / f"ledger_{strategy}.csv").to_dict("records")
+            if not pd.isna(r[target]) and not any(pd.isna(r[c]) for cols in sources.values() for c in cols)]
+
+    def scores(rs: list[dict]) -> dict:
+        out = {"n": len(rs), "rows": []}
+        for src, cols in sources.items():
+            fav = []
+            for r in rs:
+                top = [o for c, o in zip(cols, outcomes) if r[c] == max(r[c_] for c_ in cols)]
+                fav.append((r[target] in top) / len(top))
+            p_y = [r[cols[outcomes.index(r[target])]] for r in rs]
+            out["rows"].append({"source": src, "favourite_hit_rate": sum(fav) / len(rs),
+                                "log_loss": -sum(math.log(p) for p in p_y) / len(rs)})
+        on_result = lambda r, src: r[sources[src][outcomes.index(r[target])]]     # noqa: E731
+        out["model_closer_rate"] = sum(on_result(r, "model") > on_result(r, "market_pre_match") for r in rs) / len(rs)
+        return out
+
+    bins: dict[int, list] = {}
+    for r in rows:
+        for o, c in zip(outcomes, sources["model"]):
+            bins.setdefault(min(int(r[c] * 10), 9), []).append((r[c], o == r[target]))
+    calibration = [{"min_p": b / 10, "max_p": (b + 1) / 10, "n": len(v), "mean_predicted": sum(p for p, _ in v) / len(v),
+                    "observed": sum(h for _, h in v) / len(v)} for b, v in sorted(bins.items())]
+    leagues = sorted({r["league"] for r in rows})
+    return {**scores(rows), "calibration": calibration,
+            "by_league": [{"league": lg, **scores([r for r in rows if r["league"] == lg])} for lg in leagues]}
+
+
+@pytest.mark.parametrize("strategy", ["1x2", "ou25"])
+def test_probability_report_accuracy_fields(client, ledger_dir, strategy):
+    got = client.get(f"{S}/{strategy}/results/probability-report").json()
+    want = expected_report(ledger_dir, strategy)
+
+    def check(g: dict, w: dict) -> None:
+        assert g["n"] == w["n"] and g["model_closer_rate"] == pytest.approx(w["model_closer_rate"])
+        for gr, wr in zip(g["rows"], w["rows"], strict=True):
+            assert gr["source"] == wr["source"]
+            assert (gr["favourite_hit_rate"], gr["log_loss"]) == pytest.approx((wr["favourite_hit_rate"], wr["log_loss"]))
+
+    check(got, want)
+    if strategy == "ou25":     # the fixture has a 0.5/0.5 closing line: a tie counts half
+        assert want["rows"][2]["favourite_hit_rate"] * want["n"] % 1 == pytest.approx(0.5)
+    assert got["calibration"] == [pytest.approx(b) for b in want["calibration"]]
+    assert sum(b["n"] for b in got["calibration"]) == got["n"] * len(LEDGER_COLS[strategy][0])
+    assert [lg["league"] for lg in got["by_league"]] == [lg["league"] for lg in want["by_league"]]
+    assert sum(lg["n"] for lg in got["by_league"]) == got["n"]
+    for g, w in zip(got["by_league"], want["by_league"]):
+        check(g, w)
+
+
+def test_probability_report_without_settled_matches(make_client, tmp_path):
+    rep = make_client(ledgers=CsvLedgers(tmp_path)).get(f"{S}/1x2/results/probability-report").json()
+    assert rep == {"n": 0, "model_closer_rate": None, "calibration": [], "by_league": [],
+                   "rows": [{"source": s, "log_loss": None, "brier": None, "favourite_hit_rate": None}
+                            for s in ("model", "market_pre_match", "market_closing")]}
+
+
 # --------------------------------------------------------------------------- history
 
 LEDGER_COLS = {"1x2": ("HDA", "hda", "result"), "ou25": ("OU", "ou", "ou")}     # outcomes, suffixes, result column
@@ -217,6 +280,7 @@ def expected_fixtures(ledger_dir, strategy: str, book: str, min_edge: float) -> 
             "outcomes": [{"outcome": o, "p_model": r[f"p_{o}"], "p_market": r[f"mkt_{s}"],
                           "p_close": num(r.get(f"close_{s}"))} for o, s in zip(outcomes, suffixes)],
             "bet": bet,
+            "score": None if pd.isna(r["hg"]) else {"home": int(r["hg"]), "away": int(r["ag"])},
         })
     return rows
 
@@ -236,6 +300,8 @@ def test_settled_fixtures_match_the_ledger(client, ledger_dir, strategy, settled
         assert (g["result"], g["bet_status"]) == (w["result"], w["bet_status"])
         assert g["outcomes"] == [pytest.approx(o) for o in w["outcomes"]]
         assert g["bet"] == (None if w["bet"] is None else pytest.approx(w["bet"]))
+        assert g["score"] == w["score"]
+    assert {g["score"] is None for g in got} == {True, False}  # two settled rows predate the score
     assert [g["date"] for g in got] == sorted((g["date"] for g in got), reverse=True)     # default: -date
 
 

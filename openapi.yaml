@@ -263,12 +263,12 @@ paths:
     get:
       tags: [paper-trading]
       operationId: getProbabilityReport
-      summary: Log loss and Brier score of the model vs the pre-match and closing market, on the same settled matches.
+      summary: Log loss, Brier score and favourite hit rate of the model vs the pre-match and closing market, calibration and per-league scores, on the same settled matches.
       parameters:
         - $ref: "#/components/parameters/Strategy"
       responses:
         "200":
-          description: One row per probability source. Scores are null when `n` is 0.
+          description: One row per probability source. Scores are null and the arrays empty when `n` is 0.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProbabilityReport" }
@@ -534,9 +534,9 @@ components:
             min_edge: { type: number }
         - $ref: "#/components/schemas/Metrics"
 
-    ProbabilityReport:
+    ProbabilityScores:
       type: object
-      required: [n, rows]
+      required: [n, rows, model_closer_rate]
       properties:
         n:
           type: integer
@@ -547,11 +547,67 @@ components:
           maxItems: 3
           items:
             type: object
-            required: [source, log_loss, brier]
+            required: [source, log_loss, brier, favourite_hit_rate]
             properties:
               source: { enum: [model, market_pre_match, market_closing] }
               log_loss: { type: [number, "null"] }
               brier: { type: [number, "null"] }
+              favourite_hit_rate:
+                type: [number, "null"]
+                minimum: 0
+                maximum: 1
+                description: >-
+                  Share of the matches where this source's most likely outcome happened. A tie for most likely
+                  between k outcomes counts 1/k for each.
+        model_closer_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+          description: >-
+            Share of the matches where the model gave the outcome that happened a higher probability than
+            the pre-match market did. Null when `n` is 0.
+
+    ProbabilityReport:
+      allOf:
+        - $ref: "#/components/schemas/ProbabilityScores"
+        - type: object
+          required: [calibration, by_league]
+          properties:
+            calibration:
+              type: array
+              maxItems: 10
+              description: >-
+                The model's probabilities on the same matches, every outcome of every match, in bins of width
+                0.1 (a probability of 1 goes in the last). Bins without a probability left out. Ordered by `min_p`.
+              items: { $ref: "#/components/schemas/CalibrationBin" }
+            by_league:
+              type: array
+              maxItems: 16
+              description: The same scores per league, on the same matches. Ordered by league.
+              items: { $ref: "#/components/schemas/LeagueProbabilityScores" }
+
+    CalibrationBin:
+      description: The model's probabilities p with `min_p` ≤ p < `max_p`.
+      type: object
+      required: [min_p, max_p, n, mean_predicted, observed]
+      properties:
+        min_p: { type: number, minimum: 0, maximum: 0.9 }
+        max_p: { type: number, minimum: 0.1, maximum: 1 }
+        n: { type: integer, minimum: 1 }
+        mean_predicted: { type: number, minimum: 0, maximum: 1 }
+        observed:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Share of these probabilities whose outcome happened.
+
+    LeagueProbabilityScores:
+      allOf:
+        - type: object
+          required: [league]
+          properties:
+            league: { $ref: "#/components/schemas/League" }
+        - $ref: "#/components/schemas/ProbabilityScores"
 
     Catalog:
       type: object
@@ -684,7 +740,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/MatchRef"
         - type: object
-          required: [result, bet_status, outcomes, bet]
+          required: [result, bet_status, outcomes, bet, score]
           properties:
             result: { $ref: "#/components/schemas/Outcome" }
             bet_status: { $ref: "#/components/schemas/BetStatus" }
@@ -698,6 +754,18 @@ components:
               oneOf:
                 - type: "null"
                 - $ref: "#/components/schemas/FixtureBet"
+            score:
+              description: Final score. Null for matches settled before scores were kept, until the next settle.
+              oneOf:
+                - type: "null"
+                - $ref: "#/components/schemas/Score"
+
+    Score:
+      type: object
+      required: [home, away]
+      properties:
+        home: { type: integer, minimum: 0 }
+        away: { type: integer, minimum: 0 }
 
     Prediction:
       allOf:

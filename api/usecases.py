@@ -225,7 +225,7 @@ def results_summary(ledgers: Ledgers, strategy: str, book: str, min_edge: float 
     }
 
 
-FIXTURE_COLS = MATCH_KEY + ["result", "bet_status", "outcomes"]
+FIXTURE_COLS = MATCH_KEY + ["result", "bet_status", "outcomes", "score"]
 BET_COLS = ["pick", "odds", "edge", "stake", "profit", "clv"]
 
 
@@ -245,6 +245,7 @@ def settled_fixtures(ledgers: Ledgers, strategy: str, book: str, min_edge: float
          for o, s in zip(spec["outcomes"], spec["suffixes"])]
         for _, row in settled.iterrows()
     ]
+    out["score"] = [None if pd.isna(h) else {"home": int(h), "away": int(a)} for h, a in zip(settled.hg, settled.ag)]
     out = out.join(bets[BET_COLS])            # find_bets keeps the ledger's index
     out["bet_status"] = np.where(out.pick.isna(), "no_bet", np.where(out.pick == out.result, "won", "lost"))
     if bet_status:
@@ -272,19 +273,53 @@ def edge_sweep(ledgers: Ledgers, strategy: str, book: str) -> list[dict]:
     return rows
 
 
+PROB_SOURCES = {"model": "model", "market pre-match": "market_pre_match", "market closing": "market_closing"}
+
+
+def _prob_cols(spec: dict) -> dict[str, list[str]]:
+    return {"model": [f"p_{o}" for o in spec["outcomes"]], "market_pre_match": [f"mkt_{s}" for s in spec["suffixes"]],
+            "market_closing": [f"close_{s}" for s in spec["suffixes"]]}
+
+
+def _favourite_hits(p: np.ndarray, y: np.ndarray) -> float:
+    """Share of rows whose most likely outcome happened; a tie for most likely counts 1/k for each of the k."""
+    top = p == p.max(axis=1, keepdims=True)
+    return float((top[np.arange(len(y)), y] / top.sum(axis=1)).mean())
+
+
+def _probability_scores(d: pd.DataFrame, market: str, spec: dict) -> dict:
+    """Scores of each source on `d`, settled matches with every probability present (at least one)."""
+    rep = backtest.probability_report(d, market)
+    y = d[spec["target"]].map({o: i for i, o in enumerate(spec["outcomes"])}).to_numpy()
+    p = {src: d[cols].to_numpy(dtype=float) for src, cols in _prob_cols(spec).items()}
+    on_result = {src: a[np.arange(len(d)), y] for src, a in p.items()}
+    return {"n": int(rep.n.iloc[0]),
+            "rows": [{"source": PROB_SOURCES[i], "log_loss": r.log_loss, "brier": r.brier,
+                      "favourite_hit_rate": _favourite_hits(p[PROB_SOURCES[i]], y)}
+                     for i, r in rep.iterrows()],
+            "model_closer_rate": float((on_result["model"] > on_result["market_pre_match"]).mean())}
+
+
+def _calibration(d: pd.DataFrame, spec: dict) -> list[dict]:
+    """The model's probability of every outcome of every match, in bins of 0.1: how often it happened."""
+    p = d[_prob_cols(spec)["model"]].to_numpy(dtype=float).ravel()
+    hit = (d[spec["target"]].to_numpy()[:, None] == np.array(spec["outcomes"])).ravel()
+    b = np.minimum(np.floor(p * 10), 9).astype(int)
+    return [{"min_p": i / 10, "max_p": (i + 1) / 10, "n": int(m.sum()), "mean_predicted": float(p[m].mean()),
+             "observed": float(hit[m].mean())} for i in range(10) if (m := b == i).any()]
+
+
 def probability_report(ledgers: Ledgers, strategy: str) -> dict:
     _, market, spec = _strategy(strategy)
     settled = _settled(ledgers.read(strategy), spec)
-    sources = {"model": "model", "market pre-match": "market_pre_match", "market closing": "market_closing"}
-    if settled.empty:
-        return {"n": 0, "rows": [{"source": s, "log_loss": None, "brier": None} for s in sources.values()]}
-    cols = [f"{p}_{x}" for p, xs in (("p", spec["outcomes"]), ("mkt", spec["suffixes"]), ("close", spec["suffixes"]))
-            for x in xs]
-    if settled.dropna(subset=cols).empty:      # model.backtest.probability_report cannot score zero rows
-        return {"n": 0, "rows": [{"source": s, "log_loss": None, "brier": None} for s in sources.values()]}
-    rep = backtest.probability_report(settled, market)
-    return {"n": int(rep.n.iloc[0]),
-            "rows": [{"source": sources[i], "log_loss": r.log_loss, "brier": r.brier} for i, r in rep.iterrows()]}
+    if not settled.empty:
+        settled = settled.dropna(subset=[c for cols in _prob_cols(spec).values() for c in cols])
+    if settled.empty:                          # model.backtest.probability_report cannot score zero rows
+        return {"n": 0, "rows": [{"source": s, "log_loss": None, "brier": None, "favourite_hit_rate": None}
+                                 for s in PROB_SOURCES.values()],
+                "model_closer_rate": None, "calibration": [], "by_league": []}
+    return {**_probability_scores(settled, market, spec), "calibration": _calibration(settled, spec),
+            "by_league": [{"league": lg, **_probability_scores(g, market, spec)} for lg, g in settled.groupby("league")]}
 
 
 # --------------------------------------------------------------------------- optimizer

@@ -29,6 +29,7 @@ STRATEGIES = {
     "1x2": {"market": "1x2", "features": "stats+market", "leagues": list(data.LEAGUES), "edge": 0.05},
 }
 KEY = ["date", "league", "home", "away"]
+SCORE = ["hg", "ag"]       # final score (football-data FTHG, FTAG)
 
 
 def ledger_path(name: str):
@@ -74,34 +75,44 @@ def _no_close(spec: dict) -> dict:
 
 
 def settle(name: str) -> None:
-    """Fill result + no-vig closing probabilities from football-data's season files."""
+    """Fill result, final score + no-vig closing probabilities from football-data's season files.
+
+    A fixture settled before the score was kept gets only the score; its result and closing odds stay.
+    """
     ledger = read_ledger(name)
     if ledger.empty:
         print(f"[{name}] ledger is empty")
         return
     spec = data.MARKETS[STRATEGIES[name]["market"]]
     close_cols = [f"close_{s}" for s in spec["suffixes"]]
-    for c in [spec["target"]] + close_cols:
+    for c in [spec["target"]] + close_cols + SCORE:
         if c not in ledger:
             ledger[c] = None if c == spec["target"] else float("nan")
-    open_rows = ledger[spec["target"]].isna() & (ledger.date < pd.Timestamp.today().normalize())
-    if not open_rows.any():
+    past = ledger.date < pd.Timestamp.today().normalize()
+    open_rows = ledger[spec["target"]].isna() & past
+    todo = open_rows | (ledger.hg.isna() & past)
+    if not todo.any():
         print(f"[{name}] nothing to settle")
         return
 
-    leagues = sorted(ledger.loc[open_rows, "league"].unique())
-    seasons = sorted(ledger.loc[open_rows, "season"].unique())
+    leagues = sorted(ledger.loc[todo, "league"].unique())
+    seasons = sorted(ledger.loc[todo, "season"].unique())
     data.download(leagues, seasons)
     played = add_market(FeatureBuilder().build(data.load(leagues, seasons)))
-    played = played[KEY + [spec["target"]] + close_cols]
+    played = played[KEY + [spec["target"]] + close_cols + SCORE]
 
-    merged = ledger.loc[open_rows, KEY].merge(played, on=KEY, how="left")
-    merged.index = ledger.index[open_rows]
+    merged = ledger.loc[todo, KEY].merge(played, on=KEY, how="left")
+    merged.index = ledger.index[todo]
     for c in [spec["target"]] + close_cols:
         ledger.loc[open_rows, c] = merged[c]
+    # Only a score that agrees with the stored result: the database refuses one that contradicts it.
+    agrees = merged.index[merged[spec["target"]] == ledger.loc[todo, spec["target"]]]
+    scored = agrees[ledger.loc[agrees, "hg"].isna()]
+    for c in SCORE:
+        ledger.loc[scored, c] = merged.loc[scored, c]
     done = ledger.loc[open_rows, spec["target"]].notna().sum()
     ledger.to_csv(ledger_path(name), index=False)
-    print(f"[{name}] settled {done} of {open_rows.sum()} finished fixtures")
+    print(f"[{name}] settled {done} of {open_rows.sum()} finished fixtures, {len(scored)} final scores added")
 
 
 def report(name: str, book: str = "avg", edge: float | None = None) -> None:

@@ -53,6 +53,10 @@ BAD_1X2 = {
     "closing odds partly missing": lambda r: {"close_d": None},
     "no model probability": lambda r: {"p_D": None},
     "team plays itself": lambda r: {"away": r["home"]},
+    "score contradicts result": lambda r: {"hg": r["ag"], "ag": r["hg"]} if r["hg"] != r["ag"] else {"hg": r["hg"] + 1},
+    "half a score": lambda r: {"ag": None},
+    "negative goals": lambda r: {"hg": -1, "ag": -1},
+    "score without result": lambda r: {"result": None, "close_h": None, "close_d": None, "close_a": None},
 }
 
 
@@ -82,3 +86,10 @@ def test_ledger_ou25_rejects_unknown_outcome(pg_url: str):
     migrate.up(pg_url)
     with psycopg.connect(pg_url) as conn, pytest.raises(psycopg.errors.CheckViolation):
         _insert(conn, "ou25", {**_row("ou25"), "ou": "H"})
+
+
+def test_ledger_ou25_rejects_score_contradicting_ou(pg_url: str):
+    migrate.up(pg_url)
+    row = _row("ou25")
+    with psycopg.connect(pg_url) as conn, pytest.raises(psycopg.errors.CheckViolation):
+        _insert(conn, "ou25", {**row, "ou": "U" if row["ou"] == "O" else "O"})

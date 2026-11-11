@@ -15,7 +15,7 @@ import requests
 from psycopg import sql
 
 from model.data import MARKETS
-from model.paper import KEY, STRATEGIES
+from model.paper import KEY, SCORE, STRATEGIES
 
 log = logging.getLogger(__name__)
 # Where the paper-trading workflow commits the ledgers (scheduled workflows run on `main`).
@@ -25,7 +25,7 @@ TIMEOUT = (3.05, 5)             # connect, read (seconds)
 
 def _with_result_columns(strategy: str, df: pd.DataFrame) -> pd.DataFrame:
     spec = MARKETS[STRATEGIES[strategy]["market"]]
-    for c in [spec["target"]] + [f"close_{s}" for s in spec["suffixes"]]:
+    for c in [spec["target"]] + [f"close_{s}" for s in spec["suffixes"]] + SCORE:
         if not df.empty and c not in df:
             df[c] = np.nan
     return df
@@ -145,7 +145,8 @@ class PostgresLedgers:
         """Write back a ledger the paper job has changed, in one transaction: (rows added, rows settled).
 
         New fixtures are inserted; an existing fixture only gets its result and closing columns, and
-        only while it is unsettled. A snapshot (probabilities, odds, logged_at) is never overwritten.
+        only while it is unsettled, and its final score while it has none (counted as settled). A
+        snapshot (probabilities, odds, logged_at) is never overwritten.
         """
         table = self._table(strategy)
         spec = MARKETS[STRATEGIES[strategy]["market"]]
@@ -161,12 +162,19 @@ class PostgresLedgers:
             values["logged_at"] = [v.to_pydatetime() for v in values["logged_at"]]
             ident = lambda names: sql.SQL(", ").join(map(sql.Identifier, names))    # noqa: E731
             update = [c for c in settle_cols if c in cols]
+            score = [c for c in SCORE if c in cols]
             q = sql.SQL("INSERT INTO {t} AS l ({cols}) VALUES ({ph}) ON CONFLICT ({key}) DO ").format(
                 t=table, cols=ident(cols), ph=sql.SQL(", ").join(sql.Placeholder() * len(cols)), key=ident(KEY))
             if update:
-                q += sql.SQL("UPDATE SET {sets} WHERE l.{target} IS NULL AND EXCLUDED.{target} IS NOT NULL").format(
-                    sets=sql.SQL(", ").join(sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c)) for c in update),
-                    target=sql.Identifier(spec["target"]))
+                target = sql.Identifier(spec["target"])
+                sets = [sql.SQL("{c} = CASE WHEN l.{t} IS NULL THEN EXCLUDED.{c} ELSE l.{c} END").format(
+                            c=sql.Identifier(c), t=target) for c in update]
+                sets += [sql.SQL("{c} = COALESCE(l.{c}, EXCLUDED.{c})").format(c=sql.Identifier(c)) for c in score]
+                when = [sql.SQL("l.{t} IS NULL AND EXCLUDED.{t} IS NOT NULL").format(t=target)]
+                when += [sql.SQL("l.{c} IS NULL AND EXCLUDED.{c} IS NOT NULL").format(c=sql.Identifier(c))
+                         for c in score]
+                q += sql.SQL("UPDATE SET {sets} WHERE {when}").format(
+                    sets=sql.SQL(", ").join(sets), when=sql.SQL(" OR ").join(sql.SQL("({})").format(w) for w in when))
             else:
                 q += sql.SQL("NOTHING")
             q += sql.SQL(" RETURNING (xmax = 0)")         # true = inserted, false = updated

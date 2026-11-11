@@ -58,7 +58,7 @@ def fake_job(ledger_dir: Path, exit_code: int = 0) -> list[str]:
 def seed_unsettled(pg: PostgresLedgers, ledger_dir: Path, keep: int) -> None:
     """The first `keep` 1X2 fixtures, none settled yet."""
     df = CsvLedgers(ledger_dir).read("1x2").head(keep)
-    df = df.assign(result=np.nan, close_h=np.nan, close_d=np.nan, close_a=np.nan)
+    df = df.assign(result=np.nan, close_h=np.nan, close_d=np.nan, close_a=np.nan, hg=np.nan, ag=np.nan)
     df["result"] = df.result.astype("str")
     pg.save("1x2", df)
 

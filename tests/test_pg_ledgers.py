@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import psycopg
 import pytest
 
 from api import migrate
@@ -33,7 +34,7 @@ def test_round_trip_equals_csv(pg: PostgresLedgers, ledger_dir, strategy: str):
 def test_settle_fills_results_only(pg: PostgresLedgers, ledger_dir):
     full = CsvLedgers(ledger_dir).read("1x2")
     settled = full.result.notna()
-    unsettled = full.assign(result=np.nan, close_h=np.nan, close_d=np.nan, close_a=np.nan)
+    unsettled = full.assign(result=np.nan, close_h=np.nan, close_d=np.nan, close_a=np.nan, hg=np.nan, ag=np.nan)
     unsettled["result"] = unsettled.result.astype("str")
     assert pg.save("1x2", unsettled) == (len(full), 0)
 
@@ -46,13 +47,57 @@ def test_settle_fills_results_only(pg: PostgresLedgers, ledger_dir):
     # A settled result is final, too.
     flipped = full.copy()
     flipped.loc[settled, "result"] = flipped.loc[settled, "result"].map({"H": "A", "D": "H", "A": "D"})
+    flipped.loc[settled, ["hg", "ag"]] = np.nan          # a score must agree with its row's result
     assert pg.save("1x2", flipped) == (0, 0)
     same(pg.read("1x2"), full)
 
 
+def test_score_backfilled_on_settled_rows_only(pg: PostgresLedgers, ledger_dir):
+    """Rows settled before the score was kept get it from the next save; nothing else on them changes."""
+    full = CsvLedgers(ledger_dir).read("1x2")
+    scored = full.hg.notna()
+    assert 0 < scored.sum() < full.result.notna().sum()       # the fixture has settled rows without a score
+    assert pg.save("1x2", full.assign(hg=np.nan, ag=np.nan)) == (len(full), 0)
+
+    rewritten = full.copy()
+    rewritten.loc[scored.idxmax(), ["close_h", "close_d", "close_a"]] = [0.2, 0.3, 0.5]
+    assert pg.save("1x2", rewritten) == (0, scored.sum())
+    same(pg.read("1x2"), full)
+
+    # A score is final once stored.
+    other = full.copy()
+    other.loc[scored, ["hg", "ag"]] = other.loc[scored, ["hg", "ag"]] + 1
+    assert pg.save("1x2", other) == (0, 0)
+    same(pg.read("1x2"), full)
+
+
+def test_score_never_rewrites_a_settled_result(pg: PostgresLedgers, ledger_dir):
+    """A settled row without a score, sent with another result and a score matching that one: the stored
+    result stays, so the score contradicts it and the save is refused."""
+    full = CsvLedgers(ledger_dir).read("1x2")
+    pg.save("1x2", full.assign(hg=np.nan, ag=np.nan))
+    i = full.result.notna().idxmax()
+    other = full.copy()
+    other.loc[i, ["result", "hg", "ag"]] = ["A", 0, 1] if full.loc[i, "result"] != "A" else ["H", 1, 0]
+    with pytest.raises(psycopg.errors.CheckViolation):
+        pg.save("1x2", other)
+    assert pg.read("1x2").loc[lambda d: d.home == full.loc[i, "home"], "result"].tolist() == [full.loc[i, "result"]]
+
+
+def test_score_contradicting_result_refused(pg: PostgresLedgers, ledger_dir):
+    full = CsvLedgers(ledger_dir).read("ou25")
+    pg.save("ou25", full.assign(hg=np.nan, ag=np.nan))
+    i = full.hg.notna().idxmax()
+    bad = full.copy()
+    bad.loc[i, ["hg", "ag"]] = [0, 0] if bad.loc[i, "ou"] == "O" else [2, 1]
+    with pytest.raises(psycopg.errors.CheckViolation):
+        pg.save("ou25", bad)
+    assert pg.read("ou25").hg.isna().all()                     # the whole save rolled back
+
+
 def test_first_log_without_result_columns(pg: PostgresLedgers, ledger_dir):
     """`model.paper log` on an empty ledger writes no result/close columns until the first settle."""
-    snap = CsvLedgers(ledger_dir).read("ou25").drop(columns=["ou", "close_o", "close_u"])
+    snap = CsvLedgers(ledger_dir).read("ou25").drop(columns=["ou", "close_o", "close_u", "hg", "ag"])
     assert pg.save("ou25", snap) == (len(snap), 0)
     assert pg.read("ou25").ou.isna().all()
 

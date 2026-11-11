@@ -79,9 +79,17 @@ class Row(BaseModel):
     source: Literal['model', 'market_pre_match', 'market_closing']
     log_loss: StrictFloat | None
     brier: StrictFloat | None
+    favourite_hit_rate: Annotated[
+        StrictFloat | None,
+        Field(
+            description="Share of the matches where this source's most likely outcome happened. A tie for most likely between k outcomes counts 1/k for each.",
+            ge=0.0,
+            le=1.0,
+        ),
+    ]
 
 
-class ProbabilityReport(BaseModel):
+class ProbabilityScores(BaseModel):
     n: Annotated[
         StrictInt,
         Field(
@@ -90,6 +98,33 @@ class ProbabilityReport(BaseModel):
         ),
     ]
     rows: Annotated[list[Row], Field(max_length=3)]
+    model_closer_rate: Annotated[
+        StrictFloat | None,
+        Field(
+            description='Share of the matches where the model gave the outcome that happened a higher probability than the pre-match market did. Null when `n` is 0.',
+            ge=0.0,
+            le=1.0,
+        ),
+    ]
+
+
+class CalibrationBin(BaseModel):
+    min_p: Annotated[StrictFloat, Field(ge=0.0, le=0.9)]
+    max_p: Annotated[StrictFloat, Field(ge=0.1, le=1.0)]
+    n: Annotated[StrictInt, Field(ge=1)]
+    mean_predicted: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
+    observed: Annotated[
+        StrictFloat,
+        Field(
+            description='Share of these probabilities whose outcome happened.',
+            ge=0.0,
+            le=1.0,
+        ),
+    ]
+
+
+class LeagueProbabilityScores(ProbabilityScores):
+    league: League
 
 
 class League1(BaseModel):
@@ -205,14 +240,9 @@ class FixtureBet(BaseModel):
     ]
 
 
-class SettledFixture(MatchRef):
-    result: Outcome
-    bet_status: BetStatus
-    outcomes: Annotated[list[FixtureOutcome], Field(max_length=3, min_length=2)]
-    bet: Annotated[
-        FixtureBet | None,
-        Field(description='Null exactly when `bet_status` is `no_bet`.'),
-    ]
+class Score(BaseModel):
+    home: Annotated[StrictInt, Field(ge=0)]
+    away: Annotated[StrictInt, Field(ge=0)]
 
 
 class Outcome1(BaseModel):
@@ -499,12 +529,25 @@ class SettledBetPage(Page):
     items: list[SettledBet]
 
 
-class SettledFixturePage(Page):
-    items: list[SettledFixture]
-
-
 class EdgeSweepRow(Metrics):
     min_edge: StrictFloat
+
+
+class ProbabilityReport(ProbabilityScores):
+    calibration: Annotated[
+        list[CalibrationBin],
+        Field(
+            description="The model's probabilities on the same matches, every outcome of every match, in bins of width 0.1 (a probability of 1 goes in the last). Bins without a probability left out. Ordered by `min_p`.",
+            max_length=10,
+        ),
+    ]
+    by_league: Annotated[
+        list[LeagueProbabilityScores],
+        Field(
+            description='The same scores per league, on the same matches. Ordered by league.',
+            max_length=16,
+        ),
+    ]
 
 
 class Catalog(BaseModel):
@@ -517,6 +560,22 @@ class Catalog(BaseModel):
         ),
     ]
     live_odds: LiveOdds
+
+
+class SettledFixture(MatchRef):
+    result: Outcome
+    bet_status: BetStatus
+    outcomes: Annotated[list[FixtureOutcome], Field(max_length=3, min_length=2)]
+    bet: Annotated[
+        FixtureBet | None,
+        Field(description='Null exactly when `bet_status` is `no_bet`.'),
+    ]
+    score: Annotated[
+        Score | None,
+        Field(
+            description='Final score. Null for matches settled before scores were kept, until the next settle.'
+        ),
+    ]
 
 
 class OptimizeRequest(BaseModel):
@@ -555,6 +614,10 @@ class OptimizeResponse(BaseModel):
         ),
     ]
     scenarios: Annotated[list[Scenario], Field(max_length=3)]
+
+
+class SettledFixturePage(Page):
+    items: list[SettledFixture]
 
 
 class EdgeSweep(BaseModel):
