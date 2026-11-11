@@ -12,6 +12,8 @@ RUN npm run build
 FROM python:3.11-slim@sha256:673719e071ecf27434fd2635bbd8d00f49f4fdd81f243143438a42ced8bedf60
 ENV PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN useradd --uid 10001 --no-create-home app
+# The worker's volume mounts here (WORKER_DIR=/data): a new volume takes this directory's owner.
+RUN install -d -o app -g app /data
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

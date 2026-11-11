@@ -86,6 +86,42 @@ export to its volume after each run instead).
 ledgers (48 + 145) import under all constraints and read back equal. `PostgresLedgers.read` p50 20 ms on Docker
 Desktop (connect 6.5 ms, query 1.5 ms, the rest building the frame): no cache, no pool. Next: step 3 (worker).
 
+**Progress (2026-11-10)**: step 3 done, uncommitted. `api/worker.py` (start command `python -m api.worker`; `once` for
+a run outside the schedule), migration `0002_paper_runs` (slots that ran: a restart neither repeats nor skips one),
+`from_env` reads Postgres when `DATABASE_URL` is set (unset = the GitHub reader, the rollback), `/data` in the image
+owned by the app user. The job runs in a copy of `model/` under `WORKER_DIR`, not by patching its paths. Run in the
+built image as uid 10001 with a volume on `/data`: migrate, import (48 + 145), one real `weekly` (2 min 36 s, exit 0),
+export equal to the import input, the loop sleeps on a recorded slot and stops in under a second on SIGTERM.
+Toft facts (source read 2026-11-10): the start command replaces CMD by whitespace split; restart `unless-stopped`;
+nothing reads the image HEALTHCHECK on a worker (it shows `unhealthy`); a new volume takes the owner of the image
+directory it mounts on; `DATABASE_URL` is set by hand, host = the add-on's network alias.
+
+**Cutover (step 4, panel + one commit on `main`)**
+1. Merge `main` into `rebuild` and push, so the image's `model/paper` holds the latest ledgers.
+2. Panel: Postgres add-on; a new worker service (same repo and branch, start command `python -m api.worker`,
+   volume on `/data`, `WORKER_DIR=/data`, `DATABASE_URL`). Migrate command for the first deploy only:
+   `python -m api.migrate up && python -m api.sync import model/paper` (Toft runs it with `sh -c` in the new image;
+   its log must show the CSVs' row counts as "added"). Afterwards: `python -m api.migrate up`.
+3. The worker starts and runs the latest slot once (it has no row yet): check its log.
+4. `DATABASE_URL` on `bet-app`, deploy: the page shows the same matches as before.
+5. Disable `.github/workflows/paper-trading.yml` on `main`. Between 1 and 5 a workflow run writes CSVs the database
+   does not get: do 1–5 between two slots (not Tue/Fri morning).
+- Rollback: `python -m api.sync export DIR` on the worker, commit the CSVs to `main`, re-enable the workflow, remove
+  `DATABASE_URL` from `bet-app`, stop the worker.
+
+**Running the worker**
+- One run per slot, as the workflow: a job that ends with a non-zero exit (one strategy crashed) is saved and not
+  repeated. A run that could not finish (database or disk error, the job killed by the 30 min timeout) writes
+  nothing back and is tried again every hour until the next slot.
+- Nobody is told when a run fails (GitHub mailed the repo owner): the worker's log has `ERROR` lines, the page shows
+  a stale "last update".
+- Deploy the worker with the Recreate strategy if the panel offers it: two workers on the same `/data` during a
+  rolling deploy share the job's CSV files.
+- A season file cut off by a kill stays on the volume (`/data/model/data`): if a run starts failing on a past
+  season, delete that directory; the next run downloads it again.
+- `/data/backup` holds the ledgers as CSV after every run: the rollback input, and the only consistent backup
+  (Toft's restic run copies raw Postgres files).
+
 ## Testing the branch on Toft
 
 Decided 2026-11-05: the existing `bet-app` service is switched to branch `rebuild` (it is only used by us), with

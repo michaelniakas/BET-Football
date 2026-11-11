@@ -29,7 +29,7 @@ from . import usecases as uc
 from .contract import (BetStatus, Book, Catalog, EdgeSweep, Health, League, OptimizeRequest, OptimizeResponse,
                        PickPage, PredictionPage, ProbabilityReport, ResultsSummary, SettledBetPage,
                        SettledFixturePage, SnapshotBook)
-from .ledgers import GITHUB_MAIN, CsvLedgers, GithubLedgers
+from .ledgers import GITHUB_MAIN, CsvLedgers, GithubLedgers, PostgresLedgers
 from .odds import LiveOddsCache
 
 log = logging.getLogger(__name__)
@@ -262,10 +262,12 @@ def create_app(ledgers: uc.Ledgers, odds: uc.LiveOdds,
 
 
 def from_env() -> FastAPI:
-    """The production app: ledgers from GitHub `main` (model/paper as fallback), Odds API key from the ODDS_API_KEY secret."""
+    """The production app: ledgers from Postgres when DATABASE_URL is set, else from GitHub `main` (model/paper as
+    fallback); Odds API key from the ODDS_API_KEY secret."""
     logging.basicConfig(level=logging.INFO)
     web = WEB_DIST if (WEB_DIST / "index.html").exists() and (WEB_DIST / "assets").is_dir() else None
     if web is None:
         log.warning("no frontend build at %s: serving the API only", WEB_DIST)
-    return create_app(GithubLedgers(GITHUB_MAIN, CsvLedgers(PAPER_DIR)),
-                      LiveOddsCache(os.environ.get("ODDS_API_KEY", "")), web=web)
+    url = os.environ.get("DATABASE_URL")
+    ledgers = PostgresLedgers(url) if url else GithubLedgers(GITHUB_MAIN, CsvLedgers(PAPER_DIR))
+    return create_app(ledgers, LiveOddsCache(os.environ.get("ODDS_API_KEY", "")), web=web)
