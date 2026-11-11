@@ -145,8 +145,8 @@ class PostgresLedgers:
         """Write back a ledger the paper job has changed, in one transaction: (rows added, rows settled).
 
         New fixtures are inserted; an existing fixture only gets its result and closing columns, and
-        only while it is unsettled, and its final score while it has none (counted as settled). A
-        snapshot (probabilities, odds, logged_at) is never overwritten.
+        only while it is unsettled, and its final score while it has none and it agrees with the stored
+        result (counted as settled). A snapshot (probabilities, odds, logged_at) is never overwritten.
         """
         table = self._table(strategy)
         spec = MARKETS[STRATEGIES[strategy]["market"]]
@@ -169,10 +169,14 @@ class PostgresLedgers:
                 target = sql.Identifier(spec["target"])
                 sets = [sql.SQL("{c} = CASE WHEN l.{t} IS NULL THEN EXCLUDED.{c} ELSE l.{c} END").format(
                             c=sql.Identifier(c), t=target) for c in update]
-                sets += [sql.SQL("{c} = COALESCE(l.{c}, EXCLUDED.{c})").format(c=sql.Identifier(c)) for c in score]
+                # A score only with the result it was sent with: a stored result is kept, so one that differs
+                # gets no score (as in `model.paper.settle`) instead of failing the CHECK and the whole save.
+                scorable = sql.SQL("l.{c} IS NULL AND COALESCE(l.{t}, EXCLUDED.{t}) = EXCLUDED.{t}")
+                sets += [sql.SQL("{c} = CASE WHEN {ok} THEN EXCLUDED.{c} ELSE l.{c} END").format(
+                             c=sql.Identifier(c), ok=scorable.format(c=sql.Identifier(c), t=target)) for c in score]
                 when = [sql.SQL("l.{t} IS NULL AND EXCLUDED.{t} IS NOT NULL").format(t=target)]
-                when += [sql.SQL("l.{c} IS NULL AND EXCLUDED.{c} IS NOT NULL").format(c=sql.Identifier(c))
-                         for c in score]
+                when += [sql.SQL("{ok} AND EXCLUDED.{c} IS NOT NULL").format(
+                             c=sql.Identifier(c), ok=scorable.format(c=sql.Identifier(c), t=target)) for c in score]
                 q += sql.SQL("UPDATE SET {sets} WHERE {when}").format(
                     sets=sql.SQL(", ").join(sets), when=sql.SQL(" OR ").join(sql.SQL("({})").format(w) for w in when))
             else:

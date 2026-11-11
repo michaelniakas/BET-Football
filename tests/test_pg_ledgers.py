@@ -73,15 +73,15 @@ def test_score_backfilled_on_settled_rows_only(pg: PostgresLedgers, ledger_dir):
 
 def test_score_never_rewrites_a_settled_result(pg: PostgresLedgers, ledger_dir):
     """A settled row without a score, sent with another result and a score matching that one: the stored
-    result stays, so the score contradicts it and the save is refused."""
+    result stays and that row gets no score; the rest of the save goes through."""
     full = CsvLedgers(ledger_dir).read("1x2")
     pg.save("1x2", full.assign(hg=np.nan, ag=np.nan))
-    i = full.result.notna().idxmax()
+    scored = full.hg.notna()
+    i = scored.idxmax()
     other = full.copy()
     other.loc[i, ["result", "hg", "ag"]] = ["A", 0, 1] if full.loc[i, "result"] != "A" else ["H", 1, 0]
-    with pytest.raises(psycopg.errors.CheckViolation):
-        pg.save("1x2", other)
-    assert pg.read("1x2").loc[lambda d: d.home == full.loc[i, "home"], "result"].tolist() == [full.loc[i, "result"]]
+    assert pg.save("1x2", other) == (0, scored.sum() - 1)
+    same(pg.read("1x2"), full.assign(hg=full.hg.mask(full.index == i), ag=full.ag.mask(full.index == i)))
 
 
 def test_score_contradicting_result_refused(pg: PostgresLedgers, ledger_dir):

@@ -65,12 +65,13 @@ function BetsTab() {
     signal,
   }), [s.id, JSON.stringify(where), status, offset]);
 
+  const noBets = summary.data?.metrics === null;    // the board says why, once: no chart, no empty list
   return (
     <>
       <RuleBar />
       <Loaded state={summary} height={110}>{(sum) => <div className="hero"><BetBoard sum={sum} /></div>}</Loaded>
       <div className="card pad">
-        <div className="row between" style={{ marginBottom: 14, alignItems: "flex-start" }}>
+        <div className="row between" style={{ marginBottom: noBets ? 0 : 14, alignItems: "flex-start" }}>
           <div>
             <span className="eyebrow">{t("profitOverTime")}</span>
             {summary.data?.metrics && (
@@ -82,9 +83,11 @@ function BetsTab() {
           <Choice look="chips" label={t("period")} value={period} onChange={setPeriod}
                   options={[{ value: "4w", label: t("last4w") }, { value: "all", label: t("allTime") }]} />
         </div>
-        <Loaded state={summary} height={240}>
-          {(sum) => sum.metrics === null ? <p className="muted">{t("noBetsFound")}</p> : <ProfitChart series={sum.series} />}
-        </Loaded>
+        {!noBets && (
+          <Loaded state={summary} height={240}>
+            {(sum) => sum.metrics !== null && <ProfitChart series={sum.series} />}
+          </Loaded>
+        )}
       </div>
 
       <div className="row between">
@@ -94,7 +97,7 @@ function BetsTab() {
         <Search value={typed} onChange={setTyped} />
       </div>
       <Loaded state={fixtures} height={300}>
-        {(page) => page.total === 0 ? <Note>{t("noBetsFound")}</Note> : (
+        {(page) => page.total === 0 ? !noBets && <Note>{t("noBetsFound")}</Note> : (
           <div className="card list">
             <div className="li li-head">
               <span>{t("hDate")}</span><span>{t("hMatchScore")}</span><span>{t("hOurBet")}</span>
@@ -216,7 +219,9 @@ function MatchesTab() {
               const model = os.map((o) => o.p_model), market = os.map((o) => o.p_market);
               const hit = os.findIndex((o) => o.outcome === r.result);
               const pHit = model[hit] ?? 0;
-              const favWon = pHit === Math.max(...model);
+              const top = Math.max(...model);
+              // As the API's favourite hit rate: a tie for favourite that includes the result is a partial hit.
+              const fav = pHit !== top ? "favLost" : model.filter((p) => p === top).length > 1 ? "favShared" : "favWon";
               const closer = pHit > (market[hit] ?? 0);
               return (
                 <div key={matchKey(r)} className="li">
@@ -241,7 +246,7 @@ function MatchesTab() {
                     <Strip ps={model} hit={hit} /><Strip ps={market} market />
                   </div>
                   <span className="stack">
-                    <span className={`tag ${favWon ? "win" : "loss"}`}>{t(favWon ? "favWon" : "favLost")}</span>
+                    <span className={`tag ${fav === "favWon" ? "win" : fav === "favLost" ? "loss" : ""}`}>{t(fav)}</span>
                     <small className="muted">
                       {t("onResult", { p: f.pct(pHit, 0), o: t(`out_${r.result}`) })} · {t(closer ? "beatBookies" : "bookiesCloser")}
                     </small>

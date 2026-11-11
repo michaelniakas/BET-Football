@@ -17,7 +17,7 @@ export interface Rule {
   book: Book;
 }
 
-export interface Ctx {
+interface Ctx {
   t: T;
   f: Fmt;
   lang: Lang;
@@ -182,7 +182,7 @@ export function LeagueSelect({ value, options, onChange }: {
 
 // --------------------------------------------------------------------------- glossary
 
-export type GlossId = "edge" | "odds" | "roi" | "clv" | "units" | "fav" | "logloss" | "closer" | "calib" | "scenarios";
+type GlossId = "edge" | "odds" | "roi" | "clv" | "units" | "fav" | "logloss" | "closer" | "calib" | "scenarios";
 
 export const GLOSS: { id: GlossId; title: Key; body: Key; formula?: Key }[] = [
   { id: "edge", title: "g_edge", body: "g_edge_body", formula: "g_edge_formula" },

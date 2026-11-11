@@ -30,6 +30,9 @@ STRATEGIES = {
 }
 KEY = ["date", "league", "home", "away"]
 SCORE = ["hg", "ag"]       # final score (football-data FTHG, FTAG)
+# Settle stops looking for a fixture's result and score this long after kick-off: a postponed match
+# reappears under another date, and a result football-data changed after we settled never gets a score.
+GIVE_UP = pd.Timedelta(days=30)
 
 
 def ledger_path(name: str):
@@ -88,7 +91,8 @@ def settle(name: str) -> None:
     for c in [spec["target"]] + close_cols + SCORE:
         if c not in ledger:
             ledger[c] = None if c == spec["target"] else float("nan")
-    past = ledger.date < pd.Timestamp.today().normalize()
+    today = pd.Timestamp.today().normalize()
+    past = (ledger.date < today) & (ledger.date >= today - GIVE_UP)
     open_rows = ledger[spec["target"]].isna() & past
     todo = open_rows | (ledger.hg.isna() & past)
     if not todo.any():
