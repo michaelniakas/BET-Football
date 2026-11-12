@@ -13,7 +13,7 @@ import psycopg
 
 from model.data import LEAGUES, current_season_start
 
-from . import espn, names as team_names, store
+from . import espn, footballdata, names as team_names, store
 from .martj42 import Game
 
 NATIONAL, CLUB = "national", "club"
@@ -199,6 +199,99 @@ def import_odds(conn: psycopg.Connection, rows: list[dict]) -> dict[str, int]:
                 "no_fixture": no_fixture, "snapshots": inserted}
 
 
+def import_footballdata(conn: psycopg.Connection, games: list[footballdata.Game]) -> dict[str, int]:
+    """One football-data file. football-data is the club identity source: every name is a team. A game finds its
+    fixture by the ledger projection's key (competition, UK date, teams), else is inserted; a kick-off and a score
+    fill what is missing, a score only when it agrees with what the ledgers settled. Prices are untimed, first kept."""
+    with conn.transaction():
+        store.lock(conn)
+        codes = sorted({g.code for g in games})
+        conn.execute("""
+            INSERT INTO competitions (code, name) SELECT c, n FROM unnest(%s::text[], %s::text[]) u(c, n)
+            ON CONFLICT (code) DO UPDATE SET name = coalesce(competitions.name, EXCLUDED.name)""",
+            (codes, [(footballdata.MAIN | footballdata.EXTRA)[c] for c in codes]))
+        teams = store.create_teams(conn, "football-data", CLUB, {g.home for g in games} | {g.away for g in games})
+        conn.execute("""CREATE TEMP TABLE stage (n int, code text, season smallint, date date, kickoff timestamptz,
+                        home_id int, away_id int, hg smallint, ag smallint) ON COMMIT DROP;
+                        CREATE TEMP TABLE stage_prices (n int, market text, line numeric, bookmaker text, kind text,
+                        prices float8[]) ON COMMIT DROP""")
+        with conn.cursor().copy("COPY stage FROM STDIN") as cp:
+            for n, g in enumerate(games):
+                cp.write_row((n, g.code, g.season, g.date, g.kickoff, teams[g.home], teams[g.away], g.hg, g.ag))
+        with conn.cursor().copy("COPY stage_prices FROM STDIN") as cp:
+            for n, g in enumerate(games):
+                for p in g.prices:
+                    cp.write_row((n, p.market, p.line, p.bookmaker, p.kind, list(p.prices)))
+        key = "(f.competition_id, f.date, f.home_id, f.away_id) = (c.id, s.date, s.home_id, s.away_id)"
+        inserted = conn.execute("""
+            INSERT INTO fixtures (competition_id, season, date, home_id, away_id, kickoff, hg, ag)
+            SELECT c.id, s.season, s.date, s.home_id, s.away_id, s.kickoff, s.hg, s.ag FROM stage s JOIN competitions c ON c.code = s.code
+            ON CONFLICT DO NOTHING""").rowcount
+        conn.execute(f"""UPDATE fixtures f SET kickoff = s.kickoff FROM stage s JOIN competitions c ON c.code = s.code
+                         WHERE {key} AND f.kickoff IS NULL AND s.kickoff IS NOT NULL""")
+        filled = conn.execute(f"""
+            UPDATE fixtures f SET hg = s.hg, ag = s.ag FROM stage s JOIN competitions c ON c.code = s.code
+            WHERE {key} AND f.hg IS NULL AND (f.result IS NULL OR f.result = outcome_1x2(s.hg, s.ag))
+              -- A predicted fixture's score is the ledger's to set: one filled here first could not take a
+              -- correction football-data makes before settle (the score is final once set).
+              AND NOT EXISTS (SELECT FROM predictions p WHERE p.fixture_id = f.id)
+              AND (f.ou25 IS NULL OR f.ou25 = outcome_ou25(s.hg, s.ag))""").rowcount
+        disagree = conn.execute(f"""
+            SELECT count(*) FROM stage s JOIN competitions c ON c.code = s.code JOIN fixtures f ON {key}
+            WHERE (f.hg, f.ag) <> (s.hg, s.ag) OR f.result <> outcome_1x2(s.hg, s.ag)
+               OR f.ou25 <> outcome_ou25(s.hg, s.ag)""").fetchone()[0]
+        prices = conn.execute(f"""
+            INSERT INTO odds_snapshots (fixture_id, market, line, source, bookmaker, kind, captured_at, prices)
+            SELECT f.id, p.market, p.line, 'football-data', p.bookmaker, p.kind, NULL, p.prices
+            FROM stage_prices p JOIN stage s USING (n) JOIN competitions c ON c.code = s.code JOIN fixtures f ON {key}
+            ON CONFLICT DO NOTHING""").rowcount
+        return {"games": len(games), "inserted": inserted, "filled": filled, "score_disagrees": disagree,
+                "prices": prices}
+
+
+def footballdata_seasons(conn: psycopg.Connection) -> set[tuple[str, int]]:
+    """(code, season) of the football-data files imported so far: every file has untimed prices, and a file is
+    imported whole or not at all. Fixtures alone don't tell: the ledgers and ESPN make them too."""
+    return set(conn.execute("""
+        SELECT DISTINCT c.code, f.season FROM odds_snapshots o JOIN fixtures f ON f.id = o.fixture_id
+        JOIN competitions c ON c.id = f.competition_id
+        WHERE o.source = 'football-data' AND o.captured_at IS NULL""").fetchall())
+
+
+class MergeError(Exception):
+    pass
+
+
+def merge(conn: psycopg.Connection, name: str, keep: str) -> int:
+    """Two football-data spellings of one club (a rename): `name`'s team, its fixtures and every source's spelling
+    of it move to `keep`'s team, and the emptied team goes. Re-running is a no-op. Refused when the two met (a fixture
+    against itself) or when `name`'s team is in the paper ledgers (their views would show the other name)."""
+    with conn.transaction():
+        store.lock(conn)
+        ids = store.aliases(conn, "football-data", CLUB)
+        for n in (name, keep):
+            if n not in ids:
+                raise MergeError(f"football-data:{n!r} names no club yet (python -m ingest football-data first)")
+        old, new = ids[name], ids[keep]
+        if old == new:
+            return new
+        if conn.execute("SELECT EXISTS (SELECT FROM fixtures WHERE (home_id, away_id) IN ((%s, %s), (%s, %s)))",
+                        (old, new, new, old)).fetchone()[0]:
+            raise MergeError(f"{name!r} and {keep!r} played each other: two clubs, not one")
+        if conn.execute("SELECT EXISTS (SELECT FROM fixtures f JOIN predictions p ON p.fixture_id = f.id"
+                        " WHERE %s IN (f.home_id, f.away_id))", (old,)).fetchone()[0]:
+            raise MergeError(f"{name!r} is in the paper ledgers: merge the other way round")
+        try:
+            for stmt in ("UPDATE fixtures SET home_id = %(new)s WHERE home_id = %(old)s",
+                         "UPDATE fixtures SET away_id = %(new)s WHERE away_id = %(old)s",
+                         "UPDATE team_aliases SET team_id = %(new)s WHERE team_id = %(old)s",
+                         "DELETE FROM teams WHERE id = %(old)s"):
+                conn.execute(stmt, {"old": old, "new": new})
+        except psycopg.errors.UniqueViolation as e:
+            raise MergeError(f"one game is stored under both names: {e.diag.message_detail}") from None
+        return new
+
+
 def seed(conn: psycopg.Connection, rows: list[dict[str, str]]) -> dict[str, int]:
     """The pilot's checked mapping (research/teams.csv: source, league, source_name, fd_name) as aliases.
     An alias that already points elsewhere is left alone and counted."""
@@ -241,7 +334,8 @@ def alias(conn: psycopg.Connection, source: str, name: str, target: str) -> int:
 def check(conn: psycopg.Connection, since: dt.date) -> dict:
     """What the jobs left behind, for a human: fixtures per kind, refs per source, names still queued, how close
     to kick-off the last Odds API price of each finished game was, and fixtures from `since` on that share their
-    teams with another fixture within two days (a two-legged tie, or one game stored twice)."""
+    teams with another fixture within two days (a two-legged tie, or one game stored twice); per club season, the
+    fixtures with a score, with football-data prices, and with closing prices."""
     kinds = conn.execute("""
         SELECT c.kind, count(*), count(f.kickoff), count(f.hg) FROM fixtures f
         JOIN competitions c ON c.id = f.competition_id GROUP BY c.kind ORDER BY c.kind""").fetchall()
@@ -259,4 +353,13 @@ def check(conn: psycopg.Connection, since: dt.date) -> dict:
          AND ((b.home_id, b.away_id) = (a.home_id, a.away_id) OR (b.home_id, b.away_id) = (a.away_id, a.home_id))
         JOIN teams h ON h.id = a.home_id JOIN teams w ON w.id = a.away_id
         WHERE greatest(a.date, b.date) >= %s ORDER BY a.date, a.id""", (since,)).fetchall()
-    return {"kinds": kinds, "refs": refs, "unmapped": unmapped, "closing": closing, "near": near}
+    seasons = conn.execute("""
+        SELECT f.season, count(*), count(f.hg),
+               count(*) FILTER (WHERE EXISTS (SELECT FROM odds_snapshots o WHERE o.fixture_id = f.id
+                                              AND o.source = 'football-data' AND o.captured_at IS NULL)),
+               count(*) FILTER (WHERE EXISTS (SELECT FROM odds_snapshots o WHERE o.fixture_id = f.id
+                                              AND o.source = 'football-data' AND o.kind = 'closing'))
+        FROM fixtures f JOIN competitions c ON c.id = f.competition_id WHERE c.kind = 'club_league'
+        GROUP BY f.season ORDER BY f.season""").fetchall()
+    return {"kinds": kinds, "refs": refs, "unmapped": unmapped, "closing": closing, "near": near,
+            "seasons": seasons}

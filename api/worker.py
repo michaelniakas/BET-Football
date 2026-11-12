@@ -38,12 +38,13 @@ ROOT = MODEL.parent
 DAILY = range(7)
 # Ingest job -> its UTC times of day, in run order: results and fixtures before the prices that need them.
 INGEST = {
+    "football-data": (timedelta(hours=5),),
     "martj42": (timedelta(hours=6),),
     "espn": (timedelta(hours=6),),
     "odds": (timedelta(hours=6, minutes=30), timedelta(hours=11), timedelta(hours=15),
              timedelta(hours=18, minutes=30)),
 }
-INGEST_TIMEOUT = 15 * 60            # seconds: an ESPN run takes ~4 minutes
+INGEST_TIMEOUT = 15 * 60            # seconds: an ESPN run takes ~4 minutes; football-data stops at 10 (FD_BUDGET)
 
 
 def _slots(now: datetime, days, times, span: range):

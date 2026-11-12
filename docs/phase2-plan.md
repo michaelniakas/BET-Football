@@ -88,3 +88,79 @@ The Odds API job never creates fixtures. `ingest check` lists fixtures of the la
 | 7 | `python -m ingest check`, deploy | Counts, unmapped, closing, near-duplicates after two daily runs |
 
 Needs on Toft: `ODDS_API_KEY` secret on the worker.
+
+# Phase 2b: football-data history with its odds
+
+Approved 2026-11-12 (user: "go with all bookmakers"; Asian handicap not wanted). Branch `phase2`; deploys after 0005.
+
+## Facts checked 2026-11-12
+
+- Main files `mmz4281/{season}/{code}.csv` (`www.` now redirects to the bare domain). 2000/01 E0: 5 books' pre-match
+  1X2 only. 2025/26 E0: ~32 price columns a game (11 books' 1X2 + O/U 2.5, pre-match and closing). 2026/27: no
+  Pinnacle; `SKB` appears, not in `notes.txt`. `Time` only in recent seasons. Pre-match prices are "collected
+  Friday afternoons, Tuesday afternoons for midweek games": no capture time.
+- Extra leagues `new/{CODE}.csv`: one file per country, all seasons since 2012, closing 1X2 only (PSC, MaxC, AvgC,
+  BFEC, B365C); `Season` is `2012/2013` or `2012`; league names carry stray spaces.
+
+Step 0 scan (every file, 2026-11-12): 605 files, 264,599 games with a score (4 rows without, 0 bad dates, 0 in-file
+duplicates). Main codes 2000/01–2026/27 except EC (from 2005/06: earlier files absent); extra leagues 2012–2026 (CHN
+2014). `Time` in main files from 2019/20, extra leagues always. 3.20M valid price rows (1X2 pre 1.79M, closing
+0.71M; O/U pre 0.47M, closing 0.23M; 25 books), 52 invalid (zeros, partial). No name is used in two countries.
+Quirks: 15 files are cp1252, not UTF-8 (`King’s Lynn`), values carry non-breaking spaces; G1 2000/01–2004/05 name
+teams `HT`/`AT`; `SKB` (Sky Bet, 2026/27) is not in `notes.txt`; `D2_0405.csv` heads three columns `LB` (ignored).
+
+**Spellings of one club** (decided by me, user: "you are clever enough to do it on your own"): merged with
+`python -m ingest merge NAME KEEP` after the import, on dev and on Toft: Roda JC → Roda, Sparta → Sparta Rotterdam,
+OFI → OFI Crete, Ruch → Ruch Chorzow, Osters → Oster, Boston → Boston Utd, Leonesa → Cultural Leonesa, Kallithea →
+Athens Kallithea, AFC Telford United → Telford United, PK-35 Vantaa → PK-35, Mouscron-Peruwelz → Mouscron,
+Waasland-Beveren → Beveren, U Craiova → Univ. Craiova, Guangzhou Evergrande → Guangzhou FC, Guangzhou R&F →
+Guangzhou City, Wimbledon → Milton Keynes Dons. Kept apart (another club, mostly refounded): AFC Wimbledon, Airdrie /
+Airdrie Utd, Lommel / Lommel SK, Molenbeek / RWD Molenbeek, U Craiova 1948, Ostersunds, Gaziantep(spor),
+(Yeni) Malatyaspor, Extremadura (UD), (UCAM) Murcia, Aves / AVS, Granada 74. Only renames the spelling scan or a
+season check found; a rename to an unrelated name stays two teams until someone notices.
+
+## Shape
+
+- **Migration 0006** (`odds_snapshots` only): + `kind` (`pre_match`, `closing`; default `pre_match`), `captured_at`
+  nullable (NULL = the source gave no time), key `(fixture_id, market, line, source, bookmaker, kind, captured_at)`
+  NULLS NOT DISTINCT: one untimed pre-match and one closing price per book, first kept. Same shape as
+  `market_probs`. The views join on `captured_at = predicted_at`, so untimed rows never reach them. Rollback deletes
+  the untimed rows, restores NOT NULL and the old key.
+- **Fixtures**: football-data is the club identity source (no queue). The projection's exact key (competition, UK
+  date, home, away), so ledger fixtures are reused. Only rows with a score. A score fills a fixture without one
+  and only when it agrees with a settled `result`/`ou25`, and never one with a prediction (the ledger settles its
+  own: a score filled first could not take a later football-data correction); a disagreement is reported. `result`/`ou25` stay the
+  ledger's. `kickoff` from `Time` (UK) only where NULL: ESPN wins.
+- **Odds**: 1X2 and O/U 2.5, **every bookmaker** (dropping later is a DELETE; getting back is not guaranteed).
+  Allowlist of book codes + optional `C` + outcome; `P`/`PS` → `ps`. An unknown odds-looking column is reported
+  (exit 1). A price ≤ 1 or a missing one skips that row, counted.
+- **Job** `python -m ingest football-data [CODE SEASON]`: current season of the 22 main codes, the 16 extra-league
+  files, and every (code, season) since 2000/01 without untimed football-data prices yet (every file has some;
+  fixtures alone don't tell, the ledgers and ESPN make them); one transaction per file; a 10-minute budget
+  stops between files, so the backfill on Toft runs itself over a day or two. Worker: daily 05:00 UTC.
+
+## Steps
+
+| # | Step | Check |
+|---|---|---|
+| 0 | Scan every file (no DB): missing files, headers/unknown columns, games and price rows per market and kind, bad prices, bad dates, names in more than one country, close spellings within a country | User reviews; fixes the allowlist and first seasons. Gate |
+| 1 | Migration 0006 + rollback | Up/down/up; bad `kind` rejected; second untimed pre-match rejected; golden + pg ledger tests green |
+| 2 | Parser `ingest/footballdata.py` | Tests on recorded slices (2000/01, 2005/06, 2025/26, 2026/27, ARG) |
+| 3 | `jobs.import_footballdata` + CLI | Re-run adds 0; ledger fixture reused, `diff` 0; ESPN kick-off kept; disagreeing score reported. Live: counts = CSV; size measured; kick-offs vs ESPN |
+| 4 | Worker slot + budget | Due/next slot; budget stops between files; next run resumes |
+| 5 | `ingest check` additions | Per club season: fixtures, with a score, with football-data prices, with closing prices (per competition-season was ~600 lines; a missing file shows in the next run instead) |
+
+### Done (2026-11-12, dev `bet_p2`)
+
+- pytest 407 passed. Reviewer on the whole diff: fixed a score filled before settle (the ledger's fixtures are now
+  left to it), an empty file or `csv.Error` ending the run, and a merge that would collide giving a traceback.
+- Live: two runs (604 s, budget hit with 175 files left; then 338 s): 264,599 fixtures inserted and 3,207,475
+  prices, both exactly the scan's counts; 0 disagreeing scores, 0 unknown columns. `odds_snapshots` 576 MB,
+  database 647 MB. The done-seasons query (`jobs.footballdata_seasons`) is two parallel seq scans, 1.26 s a run.
+- ESPN over 1–10 Nov 2026 afterwards: 216 games linked to football-data's fixtures, kick-offs identical on all 213
+  with a time; 3 SP2 games ESPN has and football-data doesn't (postponed, it seems) got their own fixtures.
+- The 16 merges ran. Every club season 2000–2026 is covered; closing prices from 2012/13 on (96% then, ~100% from 2016).
+- Known and accepted: a game moved by a day after ESPN stored it gets a second fixture from football-data (exact
+  key, as the ledger's); `ingest check`'s near-duplicates list shows it.
+
+Not in 2b: Asian handicap, 1993–2000 results (no odds), `fixtures.csv` snapshots for all leagues.

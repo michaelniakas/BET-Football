@@ -169,6 +169,17 @@ BAD_NORMALIZED = {
     "two ESPN events, one fixture": "INSERT INTO fixture_refs VALUES ('espn', '1', 1), ('espn', '2', 1)",
     "queued name never seen": "INSERT INTO unmapped_names (source, name, kind, competition, seen) "
         "VALUES ('espn', 'Arsenal FC', 'club', 'E0', 0)",
+    # 0006
+    "unknown odds kind": "INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'avg', NULL, "
+        "'{2,3.5,4}', 'opening')",
+    "second untimed pre-match price": "INSERT INTO odds_snapshots VALUES "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2,3.5,4}', 'pre_match'), "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}', 'pre_match')",
+    "second closing price": "INSERT INTO odds_snapshots VALUES "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2,3.5,4}', 'closing'), "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}', 'closing')",
+    "untimed price rewritten": "INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'max', NULL, "
+        "'{2,3.5,4}', 'closing'); UPDATE odds_snapshots SET prices = '{2,3.6,4}' WHERE kind = 'closing'",
 }
 
 GOOD_NORMALIZED = {
@@ -177,7 +188,25 @@ GOOD_NORMALIZED = {
     # 0005
     "kick-off the evening before (UTC)": "UPDATE fixtures SET kickoff = '2026-11-07 23:30Z', decided = 'regular'",
     "another job's slot": "INSERT INTO paper_runs (job, slot) VALUES ('espn', '2026-11-06 06:00Z')",
+    # 0006
+    "untimed pre-match price beside a timed one": "INSERT INTO odds_snapshots VALUES "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}')",
+    "closing price, same book": "INSERT INTO odds_snapshots VALUES "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}', 'closing')",
 }
+
+
+def test_down_removes_untimed_and_closing_prices_only(fixture_row: psycopg.Connection, pg_url: str):
+    fixture_row.execute("""
+        INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'b365', NULL, '{2,3.5,4}', 'pre_match'),
+                                          (1, '1x2', NULL, 'football-data', 'b365', NULL, '{2,3.4,4}', 'closing'),
+                                          (1, '1x2', NULL, 'the-odds-api', 'b365', '2026-11-08Z', '{2,3.4,4}', 'closing')
+    """)
+    fixture_row.commit()
+    assert migrate.down(pg_url) == "0006_untimed_odds"
+    with psycopg.connect(pg_url) as conn:
+        assert conn.execute("SELECT bookmaker, captured_at IS NOT NULL FROM odds_snapshots").fetchall() == [("avg", True)]
+    assert migrate.up(pg_url) == ["0006_untimed_odds"]
 
 
 def test_old_worker_insert_still_works(fixture_row: psycopg.Connection):
@@ -205,6 +234,7 @@ def test_down_removes_international_data_only(fixture_row: psycopg.Connection, p
         INSERT INTO paper_runs (job, slot) VALUES ('espn', '2026-11-12 06:00Z'), ('paper', '2026-11-10 07:00Z');
     """)
     fixture_row.commit()
+    assert migrate.down(pg_url) == "0006_untimed_odds"
     assert migrate.down(pg_url) == "0005_ingestion"
     with psycopg.connect(pg_url) as conn:
         counts = conn.execute("SELECT (SELECT count(*) FROM fixtures), (SELECT count(*) FROM teams),"

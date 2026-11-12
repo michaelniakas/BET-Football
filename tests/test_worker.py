@@ -153,6 +153,11 @@ def test_no_ingest_job_runs_on_a_paper_slot():
     assert all(timedelta(hours=worker.HOUR) not in times for times in worker.INGEST.values())
 
 
+def test_football_data_budget_leaves_room_for_its_last_file():
+    from ingest import __main__ as cli
+    assert cli.FD_BUDGET + 3 * 60 <= worker.INGEST_TIMEOUT       # a file: a 60 s fetch timeout, then its import
+
+
 def ingest_runs(url: str) -> list[tuple[str, datetime]]:
     with psycopg.connect(url) as conn:
         return conn.execute("SELECT job, slot FROM paper_runs ORDER BY job, slot").fetchall()

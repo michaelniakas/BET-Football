@@ -252,3 +252,173 @@ def test_check_reports_the_closing_gap_and_a_reversed_near_duplicate(conn: psyco
     assert [(a_date, home, away, b_date, same) for _, a_date, home, away, _, b_date, same in r["near"]] == [
         (dt.date(2026, 11, 14), "Greece", "Cyprus", dt.date(2026, 11, 16), False)]
     assert r["unmapped"] == 0 and dict(r["refs"]) == {"espn": 2, "the-odds-api": 1}
+
+
+# --------------------------------------------------------------------------- football-data
+
+def fd_game(code: str, date: str, home: str, away: str, hg: int, ag: int, kickoff=None, prices=()):
+    import datetime as dt
+
+    from ingest.footballdata import Game
+    return Game(code, 2025, dt.date.fromisoformat(date), kickoff, home, away, hg, ag, tuple(prices))
+
+
+def test_footballdata_imports_once_and_never_overrides_espn(conn: psycopg.Connection):
+    import datetime as dt
+
+    from ingest.footballdata import Price
+    jobs.seed(conn, [{"source": "espn", "league": "E0", "source_name": "Manchester City", "fd_name": "Man City"},
+                     {"source": "espn", "league": "E0", "source_name": "Arsenal", "fd_name": "Arsenal"}])
+    jobs.import_espn(conn, espn_games(("E0", event("3", "2025-11-22T17:30Z", "Manchester City", "Arsenal"))))
+    one = Price("1x2", None, "b365", "pre_match", (1.8, 3.6, 4.5))
+    games = [fd_game("E0", "2025-11-22", "Man City", "Arsenal", 2, 1,
+                     dt.datetime(2025, 11, 22, 15, 0, tzinfo=dt.UTC),
+                     [one, Price("1x2", None, "b365", "closing", (1.7, 3.8, 5.0)),
+                      Price("ou", 2.5, "ps", "pre_match", (1.9, 1.95))]),
+             fd_game("ARG", "2025-11-23", "Instituto", "Newells Old Boys", 0, 0)]
+    report = jobs.import_footballdata(conn, games)
+    assert report == {"games": 2, "inserted": 1, "filled": 1, "score_disagrees": 0, "prices": 3}
+    assert fixture(conn, "Man City") == [("2025-11-22", dt.datetime(2025, 11, 22, 17, 30, tzinfo=dt.UTC), 2, 1, None)]
+    assert conn.execute("SELECT name, kind FROM competitions ORDER BY code").fetchall() == \
+        [("Argentina", "club_league"), ("England Premier League", "club_league")]
+    assert jobs.import_footballdata(conn, games) | {"games": 0} == \
+        {"games": 0, "inserted": 0, "filled": 0, "score_disagrees": 0, "prices": 0}
+    assert jobs.check(conn, dt.date(2025, 11, 1))["seasons"] == [(2025, 2, 2, 1, 1)]
+    # A corrected price for an untimed book: the first stays.
+    again = [fd_game("E0", "2025-11-22", "Man City", "Arsenal", 2, 1, None,
+                     [Price("1x2", None, "b365", "pre_match", (1.9, 3.5, 4.2))])]
+    assert jobs.import_footballdata(conn, again)["prices"] == 0
+    assert conn.execute("SELECT prices FROM odds_snapshots WHERE bookmaker = 'b365' AND kind = 'pre_match'"
+                        ).fetchall() == [([1.8, 3.6, 4.5],)]
+
+
+def test_footballdata_reports_a_score_against_the_settled_result(conn: psycopg.Connection):
+    jobs.import_footballdata(conn, [fd_game("E0", "2025-11-22", "Man City", "Arsenal", 2, 1)])
+    conn.execute("UPDATE fixtures SET hg = NULL, ag = NULL")                # as the ledger withdraws a score
+    report = jobs.import_footballdata(conn, [fd_game("E0", "2025-11-22", "Man City", "Arsenal", 1, 1)])
+    assert (report["filled"], report["score_disagrees"]) == (1, 0)
+    conn.execute("UPDATE fixtures SET hg = NULL, ag = NULL, result = 'H'")
+    report = jobs.import_footballdata(conn, [fd_game("E0", "2025-11-22", "Man City", "Arsenal", 1, 1)])
+    assert (report["filled"], report["score_disagrees"]) == (0, 1)
+    assert fixture(conn, "Man City")[0][2:4] == (None, None)
+    later = fd_game("E0", "2025-11-29", "Man City", "Chelsea", 1, 1)
+    jobs.import_footballdata(conn, [later])
+    conn.execute("""UPDATE fixtures SET hg = NULL, ag = NULL WHERE date = '2025-11-29';
+                    INSERT INTO models (name, version) VALUES ('m', 'v');
+                    INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, predicted_at, p)
+                    SELECT 1, id, date, '1x2', NULL, date - 1, ARRAY[.5, .3, .2] FROM fixtures
+                    WHERE date = '2025-11-29'""")
+    report = jobs.import_footballdata(conn, [later])
+    assert report["filled"] == 0                                            # the ledger settles its own
+
+
+def test_merge_moves_a_renamed_club(conn: psycopg.Connection):
+    jobs.import_footballdata(conn, [fd_game("N1", "2005-03-01", "Roda JC", "Ajax", 1, 0),
+                                    fd_game("N1", "2025-03-01", "Roda", "PSV", 0, 2),
+                                    fd_game("N1", "2025-04-01", "Ajax", "PSV", 1, 1)])
+    jobs.seed(conn, [{"source": "espn", "league": "N1", "source_name": "Roda JC Kerkrade", "fd_name": "Roda JC"}])
+    with pytest.raises(jobs.MergeError, match="names no club"):
+        jobs.merge(conn, "Roda JC Kerkrade", "Roda")
+    with pytest.raises(jobs.MergeError, match="played each other"):
+        jobs.merge(conn, "Ajax", "PSV")
+    jobs.import_footballdata(conn, [fd_game("N1", "2025-03-01", "Roda JC", "PSV", 0, 2)])
+    with pytest.raises(jobs.MergeError, match="both names"):
+        jobs.merge(conn, "Roda JC", "Roda")
+    conn.execute("DELETE FROM fixtures WHERE date = '2025-03-01' AND home_id IN"
+                 " (SELECT team_id FROM team_aliases WHERE name = 'Roda JC')")
+    roda = jobs.merge(conn, "Roda JC", "Roda")
+    assert jobs.merge(conn, "Roda JC", "Roda") == roda                    # again: a no-op
+    assert conn.execute("SELECT source, name FROM team_aliases WHERE team_id = %s ORDER BY 1, 2", (roda,)).fetchall() \
+        == [("espn", "Roda JC Kerkrade"), ("football-data", "Roda"), ("football-data", "Roda JC")]
+    assert conn.execute("SELECT count(*) FROM fixtures WHERE %s IN (home_id, away_id)", (roda,)).fetchone() == (2,)
+    assert conn.execute("SELECT count(*) FROM teams").fetchone() == (3,)
+    jobs.import_footballdata(conn, [fd_game("N1", "2005-03-01", "Roda JC", "Ajax", 1, 0)])
+    assert conn.execute("SELECT count(*) FROM fixtures").fetchone() == (3,)
+
+
+def test_merge_refuses_a_club_in_the_paper_ledgers(conn: psycopg.Connection):
+    jobs.import_footballdata(conn, [fd_game("N1", "2005-03-01", "Roda JC", "Ajax", 1, 0),
+                                    fd_game("N1", "2025-03-01", "Roda", "PSV", 0, 2)])
+    conn.execute("""INSERT INTO models (name, version) VALUES ('m', 'v');
+                    INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, predicted_at, p)
+                    SELECT 1, id, date, '1x2', NULL, date - 1, ARRAY[.5, .3, .2] FROM fixtures WHERE date = '2005-03-01'""")
+    with pytest.raises(jobs.MergeError, match="paper ledgers"):
+        jobs.merge(conn, "Roda JC", "Roda")
+    jobs.merge(conn, "Roda", "Roda JC")
+
+
+def test_footballdata_lands_on_the_ledgers_fixtures(conn: psycopg.Connection, pg_url: str, ledger_dir):
+    import pandas as pd
+
+    from api.ledgers import CsvLedgers, PostgresLedgers
+    from ingest.footballdata import Price
+    pg, csv = PostgresLedgers(pg_url), CsvLedgers(ledger_dir)
+    for s in ("1x2", "ou25"):
+        pg.save(s, csv.read(s))
+    rows = pd.concat([csv.read(s) for s in ("1x2", "ou25")]).drop_duplicates(["date", "league", "home", "away"])
+    played = rows[rows.hg.notna()]
+    before = conn.execute("SELECT count(*) FROM fixtures").fetchone()[0]
+    # Untimed prices of the books the views show, on every ledger fixture: the views never pick them up.
+    prices = [Price(m, line, b, k, p) for m, line, p in (("1x2", None, (2.0, 3.5, 4.0)), ("ou", 2.5, (1.9, 1.9)))
+              for b in ("avg", "max", "b365", "ps", "bfe") for k in ("pre_match", "closing")]
+    report = jobs.import_footballdata(conn, [
+        fd_game(r.league, pd.Timestamp(r.date).date().isoformat(), r.home, r.away, int(r.hg), int(r.ag),
+                prices=prices) for r in played.itertuples()])
+    assert len(played) and (report["inserted"], report["score_disagrees"]) == (0, 0)
+    assert conn.execute("SELECT count(*) FROM fixtures").fetchone()[0] == before
+    assert (pg.diff("1x2"), pg.diff("ou25")) == (0, 0)
+    for s in ("1x2", "ou25"):
+        pg.save(s, csv.read(s))
+    assert (pg.diff("1x2"), pg.diff("ou25")) == (0, 0)
+
+
+def test_footballdata_run_order_budget_and_resume(conn: psycopg.Connection, pg_url: str, monkeypatch, capsys):
+    import sys
+
+    import pandas as pd
+    import requests
+
+    from ingest import __main__ as cli
+    from ingest import footballdata as fd
+    from model.data import current_season_start
+    now = current_season_start(pd.Timestamp.now(tz="UTC").tz_localize(None))
+    monkeypatch.setattr(fd, "MAIN", {"E0": "England Premier League"})
+    monkeypatch.setattr(fd, "EXTRA", {"ARG": "Argentina"})
+    monkeypatch.setattr(fd, "FIRST_SEASON", now - 2)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    status: dict[str, int] = {}
+    fetched = []
+
+    def fetch(session, url: str) -> str:
+        fetched.append(url)
+        if url in status:
+            r = requests.Response()
+            r.status_code = status[url]
+            raise requests.HTTPError(f"{r.status_code}", response=r)
+        if url == fd.extra_url("ARG"):
+            return "Country,League,Season,Date,Time,Home,Away,HG,AG,Res,AvgCH,AvgCD,AvgCA\n" \
+                   f"Argentina,Liga,{now},01/03/{now},20:00,X,Y,1,1,D,2,3,4\n"
+        season = 2000 + int(url.split("/")[-2][:2])
+        return f"Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,B365H,B365D,B365A\nE0,15/01/{season + 1},A,B,1,0,2,3,4\n"
+
+    def run(*args: str) -> int:
+        fetched.clear()
+        monkeypatch.setattr(sys, "argv", ["ingest", "football-data", *args])
+        return cli.main()
+
+    monkeypatch.setattr(fd, "fetch", fetch)
+    monkeypatch.setattr(cli, "FD_BUDGET", -1)
+    assert run() == 0 and fetched == [fd.main_url("E0", now)]              # at least one file, then stop
+    assert "3 files left" in capsys.readouterr().out
+    monkeypatch.setattr(cli, "FD_BUDGET", 600)
+    assert run() == 0 and fetched == [fd.main_url("E0", now), fd.extra_url("ARG"), fd.main_url("E0", now - 1),
+                                      fd.main_url("E0", now - 2)]
+    assert run() == 0 and fetched == [fd.main_url("E0", now), fd.extra_url("ARG")]   # history done: not again
+    status[fd.main_url("E0", now)] = 404                                   # the new season has no file yet
+    assert run() == 0
+    status[fd.extra_url("ARG")] = 503
+    assert run() == 1 and len(fetched) == 2                                # a failed file: the rest still run
+    assert run("E0", str(now - 1)) == 0 and fetched == [fd.main_url("E0", now - 1)]
+    with pytest.raises(SystemExit, match="unknown football-data code"):
+        run("E0")
