@@ -2,6 +2,8 @@
 
     python -m api.sync import DIR    # CSV -> Postgres: adds new fixtures, fills results; never overwrites
     python -m api.sync export DIR    # Postgres -> CSV: the job's working copy, the backup, the rollback
+    python -m api.sync project       # ledger tables -> normalized tables (the phase 1 backfill; idempotent), then check
+    python -m api.sync check         # rows differing between each ledger table and its view; exit 1 if any
 
 Connection string from DATABASE_URL.
 """
@@ -40,12 +42,25 @@ def to_csv(pg: PostgresLedgers, directory: Path) -> dict[str, int]:
 
 
 def main() -> None:
-    if len(sys.argv) != 3 or sys.argv[1] not in ("import", "export"):
+    dirs = {"import": 3, "export": 3, "project": 2, "check": 2}
+    if len(sys.argv) < 2 or dirs.get(sys.argv[1]) != len(sys.argv):
         raise SystemExit(__doc__)
     url = os.environ.get("DATABASE_URL")
     if not url:
         raise SystemExit("DATABASE_URL is not set")
-    pg, directory = PostgresLedgers(url), Path(sys.argv[2])
+    pg = PostgresLedgers(url)
+    if sys.argv[1] in ("project", "check"):
+        differ = 0
+        for s in STRATEGIES:
+            if sys.argv[1] == "project":
+                pg.project(s)
+            n = pg.diff(s)
+            print(f"[{s}] {n} rows differ between ledger_{s} and v_ledger_{s}")
+            differ += n
+        if differ:
+            raise SystemExit(1)
+        return
+    directory = Path(sys.argv[2])
     if sys.argv[1] == "import":
         for s, (added, settled) in to_postgres(pg, directory).items():
             print(f"[{s}] added {added}, settled {settled}")

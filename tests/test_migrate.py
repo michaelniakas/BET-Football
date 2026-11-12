@@ -9,13 +9,16 @@ from psycopg import sql
 from api import migrate
 from tests.conftest import FIXTURES
 
-TABLES = {"ledger_1x2", "ledger_ou25"}
+TABLES = {"ledger_1x2", "ledger_ou25", "paper_runs", "competitions", "teams", "team_aliases", "fixtures", "models",
+          "predictions", "odds_snapshots", "market_probs", "v_ledger_1x2", "v_ledger_ou25"}
 
 
 def tables(url: str) -> set[str]:
+    """Tables and views, without the runner's own."""
     with psycopg.connect(url) as conn:
         return {r[0] for r in conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'ledger_%'")}
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+            " AND table_name <> 'schema_migrations'")}
 
 
 def test_up_down_up(pg_url: str):
@@ -93,3 +96,82 @@ def test_ledger_ou25_rejects_score_contradicting_ou(pg_url: str):
     row = _row("ou25")
     with psycopg.connect(pg_url) as conn, pytest.raises(psycopg.errors.CheckViolation):
         _insert(conn, "ou25", {**row, "ou": "U" if row["ou"] == "O" else "O"})
+
+
+# --------------------------------------------------------------------------- normalized tables (0004)
+
+@pytest.fixture
+def fixture_row(pg_url: str):
+    """A connection holding one valid fixture, prediction, snapshot and market probability (1x2 and O/U 2.5)."""
+    migrate.up(pg_url)
+    with psycopg.connect(pg_url) as conn:
+        conn.execute("""
+            INSERT INTO competitions (code) VALUES ('E0');
+            INSERT INTO teams (name) VALUES ('Arsenal'), ('Chelsea');
+            INSERT INTO team_aliases VALUES ('football-data', 'Arsenal', 1), ('football-data', 'Chelsea', 2);
+            INSERT INTO fixtures (competition_id, season, date, home_id, away_id, hg, ag, result, ou25)
+                VALUES (1, 2026, '2026-11-08', 1, 2, 2, 1, 'H', 'O');
+            INSERT INTO models (name, version) VALUES ('michalis', 'stats+market');
+            INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, predicted_at, p)
+                VALUES (1, 1, '2026-11-08', '1x2', NULL, '2026-11-06 14:00Z', '{0.5,0.3,0.2}'),
+                       (1, 1, '2026-11-08', 'ou', 2.5, '2026-11-06 14:00Z', '{0.6,0.4}');
+            INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'avg', '2026-11-06 14:00Z', '{2,3.5,4}');
+            INSERT INTO market_probs VALUES (1, '1x2', NULL, 'closing', 'model.paper', NULL, '{0.5,0.3,0.2}');
+        """)
+        conn.commit()
+        yield conn
+
+
+BAD_NORMALIZED = {
+    "probabilities don't sum to 1": "INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, "
+        "predicted_at, p) VALUES (1, 1, '2026-11-08', 'ou', 3.5, '2026-11-06Z', '{0.6,0.5}')",
+    "a probability missing": "INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, "
+        "predicted_at, p) VALUES (1, 1, '2026-11-08', 'ou', 3.5, '2026-11-06Z', '{1,NULL}')",
+    "three outcomes for O/U": "INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, "
+        "predicted_at, p) VALUES (1, 1, '2026-11-08', 'ou', 3.5, '2026-11-06Z', '{0.5,0.3,0.2}')",
+    "O/U without a line": "INSERT INTO market_probs VALUES (1, 'ou', NULL, 'closing', 'x', NULL, '{0.6,0.4}')",
+    "1x2 with a line": "INSERT INTO market_probs VALUES (1, '1x2', 1, 'closing', 'x', NULL, '{0.5,0.3,0.2}')",
+    "unknown market": "INSERT INTO market_probs VALUES (1, 'btts', NULL, 'closing', 'x', NULL, '{0.6,0.4}')",
+    "predicted after the match day": "INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, "
+        "predicted_at, p) VALUES (1, 1, '2026-11-08', 'ou', 3.5, '2026-11-09 00:30Z', '{0.6,0.4}')",
+    "fixture date not the fixture's": "INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, "
+        "predicted_at, p) VALUES (1, 1, '2026-11-09', 'ou', 3.5, '2026-11-06Z', '{0.6,0.4}')",
+    "second prediction of a market": "INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, "
+        "predicted_at, p) VALUES (1, 1, '2026-11-08', '1x2', NULL, '2026-11-07Z', '{0.4,0.3,0.3}')",
+    "match moved before its prediction": "UPDATE fixtures SET date = '2026-11-05'",
+    "odds of 1": "INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'max', '2026-11-06Z', '{1,3.5,4}')",
+    "second closing line": "INSERT INTO market_probs VALUES (1, '1x2', NULL, 'closing', 'model.paper', NULL, "
+        "'{0.4,0.3,0.3}')",
+    "pre-match without a time": "INSERT INTO market_probs VALUES (1, '1x2', NULL, 'pre_match', 'x', NULL, "
+        "'{0.4,0.3,0.3}')",
+    "score contradicts result": "UPDATE fixtures SET hg = 1, ag = 1, ou25 = NULL",
+    "score contradicts O/U": "UPDATE fixtures SET hg = 1, ag = 0",
+    "half a score": "UPDATE fixtures SET ag = NULL",
+    "team plays itself": "INSERT INTO fixtures (competition_id, season, date, home_id, away_id) "
+        "VALUES (1, 2026, '2026-11-09', 1, 1)",
+    "fixture twice": "INSERT INTO fixtures (competition_id, season, date, home_id, away_id) "
+        "VALUES (1, 2026, '2026-11-08', 1, 2)",
+    "one name, two teams": "INSERT INTO team_aliases VALUES ('football-data', 'Arsenal', 2)",
+    "settled result changed": "UPDATE fixtures SET result = 'A', hg = NULL, ag = NULL",
+    "settled O/U changed": "UPDATE fixtures SET ou25 = 'U', hg = NULL, ag = NULL",
+    "score changed": "UPDATE fixtures SET hg = 3, ag = 1",
+    "prediction rewritten": "UPDATE predictions SET p = '{0.4,0.3,0.3}' WHERE market = '1x2'",
+    "odds rewritten": "UPDATE odds_snapshots SET prices = '{2,3.4,4}'",
+    "market probabilities rewritten": "UPDATE market_probs SET p = '{0.4,0.3,0.3}'",
+}
+
+GOOD_NORMALIZED = {
+    "score withdrawn": "UPDATE fixtures SET hg = NULL, ag = NULL",
+    "match moved, predictions follow": "UPDATE fixtures SET date = '2026-11-09'",
+}
+
+
+@pytest.mark.parametrize("stmt", BAD_NORMALIZED.values(), ids=BAD_NORMALIZED.keys())
+def test_normalized_rejects(fixture_row: psycopg.Connection, stmt: str):
+    with pytest.raises(psycopg.errors.IntegrityError):
+        fixture_row.execute(stmt)
+
+
+@pytest.mark.parametrize("stmt", GOOD_NORMALIZED.values(), ids=GOOD_NORMALIZED.keys())
+def test_normalized_allows(fixture_row: psycopg.Connection, stmt: str):
+    assert fixture_row.execute(stmt).rowcount == 1
