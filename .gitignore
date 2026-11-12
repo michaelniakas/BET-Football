@@ -12,3 +12,5 @@ docs/HANDOFF.md
 web/node_modules/
 web/dist/
 web/src/schema.d.ts
+# The Odds API prices: stored locally only; their terms forbid offering raw data as downloadable files
+research/odds_intl.csv
