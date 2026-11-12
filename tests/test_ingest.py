@@ -157,6 +157,30 @@ def test_espn_club_game_lands_on_the_ledgers_fixture(conn: psycopg.Connection):
     assert [jobs.import_espn(conn, agrees)[k] for k in ("filled", "score_disagrees")] == [0, 0]
 
 
+def test_espn_run_imports_the_other_slugs_when_one_fails(conn: psycopg.Connection, pg_url: str, monkeypatch,
+                                                         capsys):
+    import sys
+
+    import requests
+
+    from ingest import __main__ as cli
+    from ingest import espn
+    jobs.import_martj42(conn, martj42.parse(RESULTS, SHOOTOUTS), {})       # Greece–Cyprus, 14 Nov
+
+    def events(first, last, slugs, pause=0.0):
+        if "fifa.friendly" not in slugs:
+            raise requests.ConnectionError("down")
+        return espn_games(("fifa.friendly", event("1", "2026-11-14T18:00Z", "Greece", "Cyprus")))
+
+    monkeypatch.setattr(espn, "events", events)
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    monkeypatch.setattr(sys, "argv", ["ingest", "espn", "2026-11-13", "2026-11-15"])
+    assert cli.main() == 1
+    out = capsys.readouterr().out
+    assert "eng.1: ConnectionError" in out and "linked 1" in out
+    assert conn.execute("SELECT count(*) FROM fixture_refs WHERE source = 'espn'").fetchone()[0] == 1
+
+
 def test_espn_rescheduled_game_is_another_fixture(conn: psycopg.Connection):
     jobs.import_martj42(conn, martj42.parse(RESULTS, SHOOTOUTS), {})
     jobs.import_espn(conn, espn_games(("fifa.friendly", event("1", "2026-11-14T18:00Z", "Greece", "Cyprus"))))
@@ -193,6 +217,21 @@ def test_odds_land_on_the_stored_fixture_before_kickoff_only(conn: psycopg.Conne
     assert jobs.import_odds(conn, rows)["snapshots"] == 0                  # same quote again: nothing new
     assert conn.execute("SELECT bookmaker, prices FROM odds_snapshots").fetchall() == [("pinnacle", [1.5, 4.0, 6.0])]
     assert conn.execute("SELECT name FROM unmapped_names WHERE source = 'the-odds-api'").fetchall() == [("Malta",)]
+
+
+def test_odds_ref_follows_an_event_moved_by_more_than_a_day(conn: psycopg.Connection):
+    from ingest import oddsapi
+    jobs.import_martj42(conn, martj42.parse(RESULTS, SHOOTOUTS), {})       # Greece–Cyprus, 14 Nov
+    jobs.import_odds(conn, oddsapi.parse([priced("a", "2026-11-14T18:00:00Z", "Greece", "Cyprus",
+                                                 "2026-11-13T12:00:00Z")]))
+    jobs.import_espn(conn, espn_games(("fifa.friendly", event("1", "2026-11-18T18:00Z", "Greece", "Cyprus"))))
+    moved = oddsapi.parse([priced("a", "2026-11-18T18:00:00Z", "Greece", "Cyprus", "2026-11-16T12:00:00Z")])
+    assert jobs.import_odds(conn, moved)["snapshots"] == 1
+    assert conn.execute("""SELECT f.date::text FROM fixture_refs r JOIN fixtures f ON f.id = r.fixture_id
+                           WHERE r.source = 'the-odds-api'""").fetchall() == [("2026-11-18",)]
+    assert conn.execute("SELECT f.date::text, s.captured_at::date::text FROM odds_snapshots s"
+                        " JOIN fixtures f ON f.id = s.fixture_id ORDER BY 1").fetchall() \
+        == [("2026-11-14", "2026-11-13"), ("2026-11-18", "2026-11-16")]
 
 
 class FakeResponse:
@@ -290,6 +329,46 @@ def test_footballdata_imports_once_and_never_overrides_espn(conn: psycopg.Connec
     assert jobs.import_footballdata(conn, again)["prices"] == 0
     assert conn.execute("SELECT prices FROM odds_snapshots WHERE bookmaker = 'b365' AND kind = 'pre_match'"
                         ).fetchall() == [([1.8, 3.6, 4.5],)]
+
+
+def test_espn_moves_a_club_game_by_a_day_and_footballdata_finds_it(conn: psycopg.Connection):
+    jobs.seed(conn, [{"source": "espn", "league": "E0", "source_name": "Manchester City", "fd_name": "Man City"},
+                     {"source": "espn", "league": "E0", "source_name": "Arsenal", "fd_name": "Arsenal"}])
+    jobs.import_espn(conn, espn_games(("E0", event("3", "2025-11-22T17:30Z", "Manchester City", "Arsenal"))))
+    jobs.import_espn(conn, espn_games(("E0", event("3", "2025-11-23T15:00Z", "Manchester City", "Arsenal"))))
+    assert [r[0] for r in fixture(conn, "Man City")] == ["2025-11-23"]
+    report = jobs.import_footballdata(conn, [fd_game("E0", "2025-11-23", "Man City", "Arsenal", 2, 1)])
+    assert (report["inserted"], report["filled"]) == (0, 1)
+    assert [r[0] for r in fixture(conn, "Man City")] == ["2025-11-23"]
+
+
+def test_espn_keeps_the_date_of_a_settled_predicted_or_blocked_club_game(conn: psycopg.Connection):
+    jobs.seed(conn, [{"source": "espn", "league": "E0", "source_name": n, "fd_name": n}
+                     for n in ("Man City", "Arsenal", "Chelsea")])
+    conn.execute("""
+        INSERT INTO competitions (code) VALUES ('E0');
+        INSERT INTO fixtures (competition_id, season, date, home_id, away_id, result)
+        SELECT 1, 2025, d::date, h.team_id, a.team_id, r FROM (VALUES
+            ('Man City', 'Arsenal', '2025-11-22', NULL), ('Chelsea', 'Arsenal', '2025-11-22', 'H'),
+            ('Arsenal', 'Man City', '2025-11-22', NULL), ('Arsenal', 'Man City', '2025-11-23', NULL)) v(hn, an, d, r)
+        JOIN team_aliases h ON (h.source, h.name) = ('football-data', v.hn)
+        JOIN team_aliases a ON (a.source, a.name) = ('football-data', v.an);
+        INSERT INTO models (name, version) VALUES ('m', 'v');
+        INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, predicted_at, p)
+        SELECT 1, f.id, f.date, '1x2', NULL, '2025-11-21', ARRAY[.5, .3, .2] FROM fixtures f
+        JOIN team_aliases h ON h.team_id = f.home_id AND (h.source, h.name) = ('football-data', 'Man City')""")
+    games = lambda day: espn_games(*(("E0", event(str(i), f"2025-11-{day}T15:00Z", h, a)) for i, (h, a) in  # noqa: E731
+                                     enumerate((("Man City", "Arsenal"), ("Chelsea", "Arsenal"), ("Arsenal", "Man City")))))
+    jobs.import_espn(conn, games(22))
+    jobs.import_espn(conn, games(23))        # predicted, settled, new key taken: no date moves
+    dates = """SELECT h.name, a.name, f.date::text, (f.kickoff AT TIME ZONE 'UTC')::date::text FROM fixtures f
+                 JOIN team_aliases h ON h.team_id = f.home_id AND h.source = 'football-data'
+                 JOIN team_aliases a ON a.team_id = f.away_id AND a.source = 'football-data' ORDER BY 1, 3"""
+    assert conn.execute(dates).fetchall() == [
+        ("Arsenal", "Man City", "2025-11-22", "2025-11-23"), ("Arsenal", "Man City", "2025-11-23", None),
+        ("Chelsea", "Arsenal", "2025-11-22", "2025-11-23"), ("Man City", "Arsenal", "2025-11-22", "2025-11-23")]
+    jobs.import_espn(conn, games(21))        # moved two days from its stored kick-off: date and kick-off together
+    assert conn.execute(dates).fetchall()[0] == ("Arsenal", "Man City", "2025-11-21", "2025-11-21")
 
 
 def test_footballdata_reports_a_score_against_the_settled_result(conn: psycopg.Connection):

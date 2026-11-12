@@ -102,10 +102,16 @@ def main() -> int:
             today = dt.datetime.now(dt.UTC).date()
             first, last = (map(dt.date.fromisoformat, args) if args else
                            (today + dt.timedelta(WINDOW[0]), today + dt.timedelta(WINDOW[1])))
-            games = espn.events(first, last, espn.SLUGS | {s: s for s in espn.NATIONAL}, pause=PAUSE)
-            report = jobs.import_espn(conn, games)
+            found, failed = {}, 0
+            for league, slug in (espn.SLUGS | {s: s for s in espn.NATIONAL}).items():
+                try:        # one failing slug: the others still land; the next day's window catches it up
+                    found |= {g["event_id"]: g for g in espn.events(first, last, {league: slug}, pause=PAUSE)}
+                except requests.RequestException as e:
+                    failed += 1
+                    print(f"{slug}: {type(e).__name__}: {e}")
+            report = jobs.import_espn(conn, list(found.values()))
             print(", ".join(f"{k} {v}" for k, v in report.items()))
-            return 1 if report["unmapped"] or report["score_disagrees"] or report["unlinked"] else 0
+            return 1 if failed or report["unmapped"] or report["score_disagrees"] or report["unlinked"] else 0
         if cmd == "odds":
             key = os.environ.get("ODDS_API_KEY")
             if not key:

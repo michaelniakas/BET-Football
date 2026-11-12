@@ -106,23 +106,28 @@ def tick(url: str, workdir: Path, now: datetime, job: list[str] = JOB) -> None:
 
 
 def ingest_tick(url: str, job: str, now: datetime, cmd: list[str] | None = None) -> None:
-    """Run the ingest job's due slot unless it already ran. Raises on a timeout: the slot stays due.
+    """Run the ingest job's due slot unless it already ran.
 
-    Exit 1 (names to confirm, a disagreeing score, or a failed source) is logged and not run again in this
-    slot: every run re-reads a window of days, so the next slot catches up what this one missed.
+    Exit 1 (names to confirm, a disagreeing score, or a failed source) and a timeout are logged and not run
+    again in this slot: every run re-reads a window of days, so the next slot catches up what this one missed.
+    A job is one transaction per import, so a killed one leaves only whole imports behind.
     """
     slot = due_slot(now, DAILY, INGEST[job])
     with psycopg.connect(url) as conn:
         if conn.execute("SELECT 1 FROM paper_runs WHERE job = %s AND slot = %s", (job, slot)).fetchone():
             return
     log.info("%s slot %s: running", job, slot.isoformat())
-    code = subprocess.run(cmd or [sys.executable, "-m", "ingest", job], cwd=ROOT, timeout=INGEST_TIMEOUT,
-                          env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}).returncode
+    try:
+        code = subprocess.run(cmd or [sys.executable, "-m", "ingest", job], cwd=ROOT, timeout=INGEST_TIMEOUT,
+                              env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}).returncode
+        outcome = f"exited {code}"
+    except subprocess.TimeoutExpired:
+        code, outcome = None, f"killed after {INGEST_TIMEOUT} s"
     with psycopg.connect(url) as conn:
         conn.execute("INSERT INTO paper_runs (job, slot) VALUES (%s, %s) ON CONFLICT DO NOTHING", (job, slot))
-    if code:
-        log.error("%s slot %s: exited %d (see its output above; `python -m ingest unmapped`)", job,
-                  slot.isoformat(), code)
+    if code != 0:
+        log.error("%s slot %s: %s (see its output above; `python -m ingest unmapped`)", job,
+                  slot.isoformat(), outcome)
 
 
 def main() -> None:

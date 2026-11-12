@@ -85,7 +85,7 @@ def import_espn(conn: psycopg.Connection, games: list[dict]) -> dict[str, int]:
     """ESPN games (ingest.espn.events: `league` is a football-data code or a national-competition slug) onto
     fixtures. An event's fixture is found by its ref, else by the same teams within a day, else inserted. Its
     kick-off follows ESPN; a missing score is filled once the game is finished, never rewritten. A game moved by
-    more than a day is another fixture; its old one stays, unplayed."""
+    more than a day is another fixture; its old one stays, unplayed. A club game moved by a day keeps its fixture."""
     with conn.transaction():
         store.lock(conn)
         comps = {}
@@ -140,6 +140,17 @@ def import_espn(conn: psycopg.Connection, games: list[dict]) -> dict[str, int]:
                 ORDER BY abs(f.date - s.date) LIMIT 1) f
             WHERE NOT EXISTS (SELECT FROM fixture_refs r WHERE {ref})
             ON CONFLICT DO NOTHING""").rowcount
+        # A club game moved by a day takes its new UK date, the key football-data and the ledgers find it by.
+        # Not internationals (martj42's local date is theirs), nor a played or predicted game (the ledger's key).
+        # The kick-off moves with it: the old one may be two days from the new date (fixtures_kickoff_on_date).
+        conn.execute(f"""
+            UPDATE fixtures f SET date = s.date, kickoff = s.kickoff
+            FROM stage s JOIN fixture_refs r ON {ref} JOIN competitions c ON c.kind = 'club_league'
+            WHERE f.id = r.fixture_id AND f.competition_id = c.id AND f.date <> s.date
+              AND f.hg IS NULL AND f.result IS NULL AND f.ou25 IS NULL
+              AND NOT EXISTS (SELECT FROM predictions p WHERE p.fixture_id = f.id)
+              AND NOT EXISTS (SELECT FROM fixtures o WHERE (o.competition_id, o.date, o.home_id, o.away_id)
+                                                           = (f.competition_id, s.date, f.home_id, f.away_id))""")
         conn.execute(f"""
             UPDATE fixtures f SET kickoff = s.kickoff, neutral = coalesce(f.neutral, s.neutral)
             FROM stage s JOIN fixture_refs r ON {ref}
@@ -178,6 +189,10 @@ def import_odds(conn: psycopg.Connection, rows: list[dict]) -> dict[str, int]:
                     cp.write_row((r["ref"], r["kickoff"].astimezone(dt.UTC).date(), r["kickoff"], ids[r["home"]],
                                   ids[r["away"]], r["bookmaker"], r["captured_at"], r["prices"]))
         ref = "r.source = 'the-odds-api' AND r.ref = s.ref"
+        # An event moved by more than a day is another fixture (as ESPN's); its prices so far stay on the old one.
+        conn.execute(f"""
+            DELETE FROM fixture_refs r USING stage s, fixtures f
+            WHERE {ref} AND f.id = r.fixture_id AND abs(f.date - s.date) > 1""")
         conn.execute(f"""
             INSERT INTO fixture_refs (source, ref, fixture_id)
             SELECT DISTINCT ON (s.ref) 'the-odds-api', s.ref, f.id FROM stage s CROSS JOIN LATERAL (

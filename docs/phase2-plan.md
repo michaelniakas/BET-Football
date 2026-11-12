@@ -160,7 +160,12 @@ season check found; a rename to an unrelated name stays two teams until someone 
 - ESPN over 1–10 Nov 2026 afterwards: 216 games linked to football-data's fixtures, kick-offs identical on all 213
   with a time; 3 SP2 games ESPN has and football-data doesn't (postponed, it seems) got their own fixtures.
 - The 16 merges ran. Every club season 2000–2026 is covered; closing prices from 2012/13 on (96% then, ~100% from 2016).
-- Known and accepted: a game moved by a day after ESPN stored it gets a second fixture from football-data (exact
-  key, as the ledger's); `ingest check`'s near-duplicates list shows it.
+- A club game moved by a day after ESPN stored it: ESPN moves its fixture to the new UK date (unless it is
+  played, settled, predicted, or the new key is taken), so football-data finds it by the exact key. Accepted: the
+  reverse order, ESPN moving it before football-data's `fixtures.csv` does, gives the paper job's prediction a
+  second fixture at the old date. Both show in `ingest check`'s near-duplicates list.
+- Deferred review items fixed (2026-11-12): Odds API refs follow an event moved by more than a day (as ESPN's);
+  one failing ESPN slug no longer fails the run (the others land, exit 1); a timed-out ingest job waits for its
+  next slot instead of retrying every wake-up.
 
 Not in 2b: Asian handicap, 1993–2000 results (no odds), `fixtures.csv` snapshots for all leagues.

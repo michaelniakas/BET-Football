@@ -186,8 +186,8 @@ def runs_paper(url: str) -> list[datetime]:
         return [r[0] for r in conn.execute("SELECT slot FROM paper_runs WHERE job = 'paper'")]
 
 
-def test_an_ingest_job_killed_by_the_timeout_stays_due(pg: PostgresLedgers, pg_url: str, tmp_path, monkeypatch):
+def test_an_ingest_job_killed_by_the_timeout_waits_for_its_next_slot(pg: PostgresLedgers, pg_url: str, tmp_path,
+                                                                     monkeypatch):
     monkeypatch.setattr(worker, "INGEST_TIMEOUT", 1)
-    with pytest.raises(subprocess.TimeoutExpired):
-        worker.ingest_tick(pg_url, "espn", utc(10, 12), note(tmp_path / "ran", sleep=60))
-    assert ingest_runs(pg_url) == []
+    worker.ingest_tick(pg_url, "espn", utc(10, 12), note(tmp_path / "ran", sleep=60))
+    assert ingest_runs(pg_url) == [("espn", utc(10, 6))]
