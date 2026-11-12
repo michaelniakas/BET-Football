@@ -21,7 +21,7 @@ import anthropic
 import requests
 
 from model.data import LEAGUES
-from research.espn import INTL, INTL_NAMES, SLUGS, fixtures
+from ingest.espn import INTL, INTL_NAMES, SLUGS, fixtures
 
 HERE = pathlib.Path(__file__).parent
 MODEL = "claude-opus-5-5"

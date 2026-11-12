@@ -10,15 +10,14 @@ import datetime as dt
 import difflib
 import pathlib
 import sys
-import unicodedata
 
 import requests
 
+from ingest.names import norm
 from model.data import BASE_URL, _read_csv, current_season_start, season_code
-from research.espn import fixtures
+from ingest.espn import fixtures
 
 OUT = pathlib.Path(__file__).parent / "teams.csv"
-NOISE = {"fc", "cf", "afc", "sc", "ac", "as", "ssc", "sv", "vfb", "vfl", "tsv", "fsv", "kv", "krc", "rc", "cd", "ud", "sd", "1", "the"}
 # Names difflib can't resolve safely, checked by hand: (league, ESPN name) -> football-data name.
 OVERRIDES: dict[tuple[str, str], str] = {
     ("B1", "OH Leuven"): "Oud-Heverlee Leuven", ("B1", "Sint-Truidense"): "St Truiden",
@@ -34,11 +33,6 @@ OVERRIDES: dict[tuple[str, str], str] = {
     ("SP2", "RC Celta Fortuna"): "Celta B", ("SP2", "Real Sociedad II"): "Sociedad B", ("SP2", "Sporting Gijón"): "Sp Gijon",
     ("T1", "Amed SFK"): "Amedspor", ("T1", "Erzurum BB"): "Erzurumspor", ("T1", "Istanbul Basaksehir"): "Buyuksehyr",
 }
-
-
-def norm(name: str) -> str:
-    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
-    return " ".join(t for t in plain.replace(".", " ").replace("-", " ").split() if t not in NOISE)
 
 
 def fd_teams(league: str) -> list[str]:
