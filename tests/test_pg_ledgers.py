@@ -281,6 +281,26 @@ def _kickoff_at_logged_at(pg_url: str, row: pd.Series) -> None:
                      (row.logged_at.to_pydatetime(), row.league, row.date.date(), row.home, row.away))
 
 
+def test_row_skipped_as_late_stays_out_when_the_kickoff_moves_later(pg: PostgresLedgers, pg_url: str, ledger_dir):
+    """As 0007 doesn't void a prediction stored before a kick-off moved earlier, a later move doesn't store one it
+    refused: inserted now, it would come after rows logged after it (prediction ids are the ledger's order)."""
+    csv = CsvLedgers(ledger_dir)
+    one, ou = csv.read("1x2"), csv.read("ou25")
+    pg.save("ou25", ou)
+    run = one[one.logged_at == one.logged_at.max()]          # the newest run: the next save comes before ESPN's move
+    late = run.merge(ou[KEY], on=KEY).iloc[0]
+    assert (late.home, late.away) != (run.iloc[-1].home, run.iloc[-1].away)    # rows were logged after it
+    _kickoff_at_logged_at(pg_url, late)
+    pg.save("1x2", one)
+    moved = late.copy()
+    moved["logged_at"] += pd.Timedelta(hours=2)
+    _kickoff_at_logged_at(pg_url, moved)                     # ESPN: kick-off two hours later
+
+    assert pg.save("1x2", one) == (0, 0)
+    assert (pg.diff("1x2"), pg.late("1x2")) == (0, 1)
+    assert len(pg.read("1x2")) == len(one) - 1
+
+
 def test_record_leaves_out_a_stored_prediction_made_after_kickoff(pg: PostgresLedgers, pg_url: str, ledger_dir,
                                                                    monkeypatch, capsys, tmp_path):
     """The 2026-10-30 run: stored before 0007, kick-off learned later. Out of the record (0008), counted as late."""
@@ -299,7 +319,7 @@ def test_record_leaves_out_a_stored_prediction_made_after_kickoff(pg: PostgresLe
     monkeypatch.setenv("DATABASE_URL", pg_url)
     monkeypatch.setattr(sys, "argv", ["api.sync", "check"])
     main()                                                   # exit 0: late isn't a difference
-    assert "[1x2] 1 logged after kick-off, left out of v_ledger_1x2" in capsys.readouterr().out
+    assert "[1x2] 1 logged after kick-off (as known when saved, or now), left out of v_ledger_1x2" in capsys.readouterr().out
 
     assert migrate.down(pg_url) == "0008_on_time_record"     # back in the record
     assert len(pg.read("1x2")) == len(one)

@@ -70,6 +70,21 @@ ledgers: both pages, both languages, tables, metrics, both charts, no console er
 (Barlow Condensed, Fira Sans Condensed for Greek, Inter). Bundle 99 kB gzipped JS + 7 kB CSS. `/results/bets` deleted
 (the UI reads `/results/fixtures`; the golden check moved there). `Pick.min_odds` added so the UI does not recompute it.
 
+**Honesty and safety minimum (2026-11-13, Nikos; the site is public)**, ahead of Michalis's `ui-plain` (next-plan,
+item D), which builds on it:
+- *Model accuracy* calls the model ahead of (or behind) the bookmakers only when the log-loss gap is at least two
+  standard errors (`log_loss_gap_se`, new in the contract), the bets board's rule; otherwise "Too early to tell". The
+  per-league green tag uses the same rule from 30 matches in the league (a league's SE is unreliable on fewer, and 16
+  leagues give chance 16 tries). On 2026-11-13: gap 0.0021, SE 0.0025, so "Too early to tell" (it said "Ahead"); no
+  league has 30 matches yet, so none is green (Greece and Italy Serie A passed 2 SE on 14 and 20).
+- *Our bets* with no bet under the rule shows only the board's one line; the chart card and filters stay when a period
+  or team filter caused the emptiness, so it can be undone.
+- Every page ends with a notice: paper bets only, no money staked, betting can be addictive, 18+, and a link to the
+  regulator's (ΕΕΕΠ) support-services page (ΕΟΠΑΕ advice line, Gamblers Anonymous). No helpline number: the
+  regulator's page lists none, and next-plan says not to write one from memory.
+Rejected: building `ui-plain` now (Michalis's plan, broader: verdict page, stake limits, frontend tests); a red
+"behind" badge (the text calls it normal).
+
 ### Phase 3: Job on Toft
 - Postgres service (volume + backups); schema with constraints, e.g. `UNIQUE (strategy, match_date, home, away)`; reversible migration.
 - One-off CSV → Postgres import; `LedgerRepository` Postgres implementation.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 from urllib.parse import quote
 
 import pandas as pd
@@ -73,6 +74,7 @@ def test_serves_frontend_build(tmp_path, ledger_dir):
 
     r = web.get("/")
     assert r.status_code == 200 and r.text.startswith("<!doctype html>") and r.headers["cache-control"] == "no-cache"
+    assert web.head("/").status_code == 200                               # uptime checks and link previews send HEAD
     assert web.get("/assets/index-abc.js").text == "console.log(1)"
     assert web.get("/assets/missing.js").status_code == 404
     problem(web.get("/api/v1/nope"), 404, "not_found")                   # the API keeps its own 404s
@@ -216,6 +218,8 @@ def expected_report(ledger_dir, strategy: str) -> dict:
                                 "log_loss": -sum(math.log(p) for p in p_y) / len(rs)})
         on_result = lambda r, src: r[sources[src][outcomes.index(r[target])]]     # noqa: E731
         out["model_closer_rate"] = sum(on_result(r, "model") > on_result(r, "market_pre_match") for r in rs) / len(rs)
+        gaps = [math.log(on_result(r, "market_pre_match")) - math.log(on_result(r, "model")) for r in rs]
+        out["log_loss_gap_se"] = statistics.stdev(gaps) / math.sqrt(len(rs)) if len(rs) > 1 else None
         return out
 
     bins: dict[int, list] = {}
@@ -236,6 +240,7 @@ def test_probability_report_accuracy_fields(client, ledger_dir, strategy):
 
     def check(g: dict, w: dict) -> None:
         assert g["n"] == w["n"] and g["model_closer_rate"] == pytest.approx(w["model_closer_rate"])
+        assert g["log_loss_gap_se"] == pytest.approx(w["log_loss_gap_se"])
         for gr, wr in zip(g["rows"], w["rows"], strict=True):
             assert gr["source"] == wr["source"]
             assert (gr["favourite_hit_rate"], gr["log_loss"]) == pytest.approx((wr["favourite_hit_rate"], wr["log_loss"]))
@@ -253,7 +258,7 @@ def test_probability_report_accuracy_fields(client, ledger_dir, strategy):
 
 def test_probability_report_without_settled_matches(make_client, tmp_path):
     rep = make_client(ledgers=CsvLedgers(tmp_path)).get(f"{S}/1x2/results/probability-report").json()
-    assert rep == {"n": 0, "model_closer_rate": None, "calibration": [], "by_league": [],
+    assert rep == {"n": 0, "model_closer_rate": None, "log_loss_gap_se": None, "calibration": [], "by_league": [],
                    "rows": [{"source": s, "log_loss": None, "brier": None, "favourite_hit_rate": None}
                             for s in ("model", "market_pre_match", "market_closing")]}
 

@@ -106,6 +106,13 @@ class ProbabilityScores(BaseModel):
             le=1.0,
         ),
     ]
+    log_loss_gap_se: Annotated[
+        StrictFloat | None,
+        Field(
+            description='Standard error of the mean per-match log-loss gap between the pre-match market and the model (the sample standard deviation of the gaps over the square root of `n`). The gap between the two `log_loss` rows is a real difference only when it is at least twice this; smaller is noise. Null when `n` is below 2.',
+            ge=0.0,
+        ),
+    ]
 
 
 class CalibrationBin(BaseModel):

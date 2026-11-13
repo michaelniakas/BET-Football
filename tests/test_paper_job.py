@@ -108,6 +108,22 @@ def test_settle_gives_up_on_fixtures_football_data_never_scores(tmp_path, monkey
     assert "nothing to settle" in capsys.readouterr().out
 
 
+def test_settle_a_ledger_with_no_result_yet(tmp_path, monkeypatch):
+    """Every `result` empty in the CSV reads as float: settling must still store the first one."""
+    day = pd.Timestamp.today().normalize() - pd.Timedelta(days=2)
+    ledger = pd.DataFrame([{"date": day, "league": "E0", "home": "Open", "away": "X", "season": 2026, "logged_at": day,
+                            "result": None}])
+    monkeypatch.setattr(model.paper, "PAPER_DIR", tmp_path)
+    ledger.to_csv(model.paper.ledger_path("1x2"), index=False)
+    _no_feature_build(monkeypatch, pd.DataFrame([
+        {"date": day, "league": "E0", "home": "Open", "away": "X", "result": "H", "hg": 2.0, "ag": 0.0,
+         "close_h": 0.6, "close_d": 0.25, "close_a": 0.15}]))
+
+    model.paper.settle("1x2")
+    got = model.paper.read_ledger("1x2").iloc[0]
+    assert (got.result, got.hg, got.ag) == ("H", 2, 0)
+
+
 def _no_feature_build(monkeypatch, played: pd.DataFrame) -> None:
     monkeypatch.setattr(model.paper.data, "download", lambda leagues, seasons: None)
     monkeypatch.setattr(model.paper.data, "load", lambda leagues, seasons: played)

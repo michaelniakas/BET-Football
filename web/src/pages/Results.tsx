@@ -66,65 +66,69 @@ function BetsTab() {
   }), [s.id, JSON.stringify(where), status, offset]);
 
   const noBets = summary.data?.metrics === null;    // the board says why, once: no chart, no empty list
+  // No bet at all under the rule: nothing to chart or filter. A period or team filter stays, so it can be undone.
+  const nothing = noBets && !summary.loading && period === "all" && !typed && !team;
   return (
     <>
       <RuleBar />
       <Loaded state={summary} height={110}>{(sum) => <div className="hero"><BetBoard sum={sum} /></div>}</Loaded>
-      <div className="card pad">
-        <div className="row between" style={{ marginBottom: noBets ? 0 : 14, alignItems: "flex-start" }}>
-          <div>
-            <span className="eyebrow">{t("profitOverTime")}</span>
-            {summary.data?.metrics && (
-              <div className={`big ${summary.data.metrics.profit >= 0 ? "pos" : "neg"}`} style={{ marginTop: 6 }}>
-                <CountUp value={summary.data.metrics.profit} show={(v) => t("units", { v: f.num(v, 2, true) })} />
-              </div>
-            )}
-          </div>
-          <Choice look="chips" label={t("period")} value={period} onChange={setPeriod}
-                  options={[{ value: "4w", label: t("last4w") }, { value: "all", label: t("allTime") }]} />
-        </div>
-        {!noBets && (
-          <Loaded state={summary} height={240}>
-            {(sum) => sum.metrics !== null && <ProfitChart series={sum.series} />}
-          </Loaded>
-        )}
-      </div>
-
-      <div className="row between">
-        <Choice look="chips" label={t("outcomeFilter")} value={status} onChange={setStatus} options={[
-          { value: "all", label: t("allBets") }, { value: "won", label: t("won") }, { value: "lost", label: t("lost") },
-        ]} />
-        <Search value={typed} onChange={setTyped} />
-      </div>
-      <Loaded state={fixtures} height={300}>
-        {(page) => page.total === 0 ? !noBets && <Note>{t("noBetsFound")}</Note> : (
-          <div className="card list">
-            <div className="li li-head">
-              <span>{t("hDate")}</span><span>{t("hMatchScore")}</span><span>{t("hOurBet")}</span>
-              <span className="right">{t("hProfit")}</span>
+      {!nothing && <>
+        <div className="card pad">
+          <div className="row between" style={{ marginBottom: noBets ? 0 : 14, alignItems: "flex-start" }}>
+            <div>
+              <span className="eyebrow">{t("profitOverTime")}</span>
+              {summary.data?.metrics && (
+                <div className={`big ${summary.data.metrics.profit >= 0 ? "pos" : "neg"}`} style={{ marginTop: 6 }}>
+                  <CountUp value={summary.data.metrics.profit} show={(v) => t("units", { v: f.num(v, 2, true) })} />
+                </div>
+              )}
             </div>
-            {page.items.map((r) => r.bet && (
-              <div key={matchKey(r)} className="li">
-                <span className="when"><span>{f.date(r.date)}</span><League id={r.league} /></span>
-                <span className="match">
-                  {r.home}<Score r={r} />{r.away}
-                  <small>
-                    {r.bet.clv === null ? t("noClose") : t(r.bet.clv > 0 ? "closeBeat" : "closeMissed", {
-                      odds: f.num(r.bet.odds / (1 + r.bet.clv)),
-                    })}
-                  </small>
-                </span>
-                <span className="wide">
-                  {betText(t, r.bet.pick, r.home, r.away)} @ <b className="num">{f.num(r.bet.odds)}</b>{" "}
-                  <span className={`tag ${r.bet_status === "won" ? "win" : "loss"}`}>{t(r.bet_status === "won" ? "won" : "lost")}</span>
-                </span>
-                <span className={`right profit ${r.bet.profit >= 0 ? "pos" : "neg"}`}>{f.num(r.bet.profit, 2, true)}</span>
-              </div>
-            ))}
-            <Pager page={page} loading={fixtures.loading} onPage={setOffset} />
+            <Choice look="chips" label={t("period")} value={period} onChange={setPeriod}
+                    options={[{ value: "4w", label: t("last4w") }, { value: "all", label: t("allTime") }]} />
           </div>
-        )}
-      </Loaded>
+          {!noBets && (
+            <Loaded state={summary} height={240}>
+              {(sum) => sum.metrics !== null && <ProfitChart series={sum.series} />}
+            </Loaded>
+          )}
+        </div>
+
+        <div className="row between">
+          <Choice look="chips" label={t("outcomeFilter")} value={status} onChange={setStatus} options={[
+            { value: "all", label: t("allBets") }, { value: "won", label: t("won") }, { value: "lost", label: t("lost") },
+          ]} />
+          <Search value={typed} onChange={setTyped} />
+        </div>
+        <Loaded state={fixtures} height={300}>
+          {(page) => page.total === 0 ? !noBets && <Note>{t("noBetsFound")}</Note> : (
+            <div className="card list">
+              <div className="li li-head">
+                <span>{t("hDate")}</span><span>{t("hMatchScore")}</span><span>{t("hOurBet")}</span>
+                <span className="right">{t("hProfit")}</span>
+              </div>
+              {page.items.map((r) => r.bet && (
+                <div key={matchKey(r)} className="li">
+                  <span className="when"><span>{f.date(r.date)}</span><League id={r.league} /></span>
+                  <span className="match">
+                    {r.home}<Score r={r} />{r.away}
+                    <small>
+                      {r.bet.clv === null ? t("noClose") : t(r.bet.clv > 0 ? "closeBeat" : "closeMissed", {
+                        odds: f.num(r.bet.odds / (1 + r.bet.clv)),
+                      })}
+                    </small>
+                  </span>
+                  <span className="wide">
+                    {betText(t, r.bet.pick, r.home, r.away)} @ <b className="num">{f.num(r.bet.odds)}</b>{" "}
+                    <span className={`tag ${r.bet_status === "won" ? "win" : "loss"}`}>{t(r.bet_status === "won" ? "won" : "lost")}</span>
+                  </span>
+                  <span className={`right profit ${r.bet.profit >= 0 ? "pos" : "neg"}`}>{f.num(r.bet.profit, 2, true)}</span>
+                </div>
+              ))}
+              <Pager page={page} loading={fixtures.loading} onPage={setOffset} />
+            </div>
+          )}
+        </Loaded>
+      </>}
 
       {summary.data?.metrics && <Detailed sum={summary.data} />}
     </>
@@ -262,6 +266,15 @@ function MatchesTab() {
   );
 }
 
+/** The model's log loss against the bookmakers': a call only when the gap is at least two standard errors, as the
+ *  bets board calls the return. Anything smaller is "even": chance alone gives gaps that size. */
+function beyondChance(model: number | null | undefined, market: number | null | undefined, se: number | null) {
+  if (model == null || market == null || se === null || model === market || Math.abs(market - model) < 2 * se) return "even";
+  return model < market ? "ahead" : "behind";
+}
+
+const LEAGUE_MIN = 30;
+
 function AccuracyTab() {
   const { t, f, s } = useCtx();
   const report = useApi((signal) => api.GET("/api/v1/strategies/{strategy}/results/probability-report", {
@@ -273,7 +286,7 @@ function AccuracyTab() {
         if (r.n === 0) return <Note>{t("noReport")}</Note>;
         const row = (src: string) => r.rows.find((x) => x.source === src);
         const model = row("model"), pre = row("market_pre_match"), close = row("market_closing");
-        const ahead = model?.log_loss != null && pre?.log_loss != null && model.log_loss <= pre.log_loss;
+        const call = beyondChance(model?.log_loss, pre?.log_loss, r.log_loss_gap_se);
         return (
           <>
             <div className="hero" style={{ gap: 22 }}>
@@ -289,8 +302,10 @@ function AccuracyTab() {
                       sub={t("sCloserSub")} />
               </div>
               <div className="verdict">
-                <span className={`chip-state${ahead ? " good" : ""}`}>{t(ahead ? "accAhead" : "accBehind")}</span>
-                <p>{t(ahead ? "accAheadText" : "accBehindText")}</p>
+                <span className={`chip-state${call === "ahead" ? " good" : ""}`}>
+                  {t(call === "ahead" ? "accAhead" : call === "behind" ? "accBehind" : "vEarly")}
+                </span>
+                <p>{t(call === "ahead" ? "accAheadText" : call === "behind" ? "accBehindText" : "accEvenText", { n: r.n })}</p>
               </div>
             </div>
             <div className="two">
@@ -307,7 +322,8 @@ function AccuracyTab() {
                 {r.by_league.map((l) => {
                   const m = l.rows.find((x) => x.source === "model")?.log_loss;
                   const k = l.rows.find((x) => x.source === "market_pre_match")?.log_loss;
-                  const better = m != null && k != null && m < k;
+                  // A league's own SE is unreliable on a handful of matches, and 16 leagues give chance 16 tries.
+                  const better = l.n >= LEAGUE_MIN && beyondChance(m, k, l.log_loss_gap_se) === "ahead";
                   return (
                     <div key={l.league} className="row between" style={{ padding: "12px 0", borderTop: "1px solid var(--line)" }}>
                       <span style={{ fontWeight: 600, minWidth: 0 }}>

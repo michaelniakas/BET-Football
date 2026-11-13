@@ -178,6 +178,15 @@ and the paper job's working copy read `ledger_*` (`PostgresLedgers.read(with_lat
 `ledger_*`, export from the views) must keep them exportable, e.g. with an unfiltered view. The views filter at
 query time: a kick-off ESPN later moves earlier than a stored prediction takes it out too, and `late` changes;
 5a alerts on a change in `late`, not only on a new row.
+The other way does not bring one back (2026-11-13, review finding): a row the save skipped as late stays out when the
+kick-off moves later, as 0007 keeps a prediction stored before a kick-off moved earlier. Stored then, its prediction id
+would come after rows logged after it, and `diff` would report the order forever. `api/ledgers.py` `NEWEST`: the
+projection stores no prediction for a ledger row before (`seq`) the last one with a prediction of that market; `diff`
+and `late` count such a row as late. A skipped row with no stored row after it can still come back (its order holds).
+Rejected: storing it (the order breaks; it would be a backfill); ordering the views by `predicted_at` (rows logged in
+one run share it, so the order within the run still breaks); guarding on `logged_at` (misses a row skipped in the
+newest run, the usual case: the paper job runs Tue/Fri, ESPN daily); a "skipped" marker column (a migration for the
+last-row case, whose order holds anyway).
 Rejected: deleting the rows (irreversible; the ledgers are the audit trail); keeping them (a record with predictions
 made during the game can't be trusted, and `sync check` would fail forever on any new late row).
 

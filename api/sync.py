@@ -60,7 +60,7 @@ def main() -> None:
                 pg.project(s)
             n = pg.diff(s)
             print(f"[{s}] {n} rows differ between ledger_{s} and v_ledger_{s}")
-            print(f"[{s}] {pg.late(s)} logged after kick-off, left out of v_ledger_{s}")
+            print(f"[{s}] {pg.late(s)} logged after kick-off (as known when saved, or now), left out of v_ledger_{s}")
             differ += n
         if differ:
             raise SystemExit(1)

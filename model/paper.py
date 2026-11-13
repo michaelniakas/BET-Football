@@ -104,6 +104,7 @@ def settle(name: str) -> None:
     for c in [spec["target"]] + close_cols + SCORE:
         if c not in ledger:
             ledger[c] = None if c == spec["target"] else float("nan")
+    ledger[spec["target"]] = ledger[spec["target"]].astype(object)      # all empty, the CSV reads it as float
     today = pd.Timestamp.today().normalize()
     past = (ledger.date < today) & (ledger.date >= today - GIVE_UP)
     open_rows = ledger[spec["target"]].isna() & past
