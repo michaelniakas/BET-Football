@@ -30,6 +30,13 @@ FIXTURE = sql.SQL("{} JOIN fixtures f ON (f.competition_id, f.date, f.home_id, f
                   " = (c.id, l.date, th.team_id, ta.team_id)").format(TEAMS)
 # Logged at or after its game's kick-off: not in the record (0007 refuses it, 0008 leaves a stored one out of v_ledger_*).
 LATE = sql.SQL("kicked_off(f.id, l.logged_at AT TIME ZONE 'UTC')")
+# The last ledger row (`seq`) with a stored prediction of the strategy's market. A row before it that has none was
+# skipped as late when it was saved, and stays out even if the kick-off moves later (as 0007 keeps one stored before
+# a kick-off moved earlier): stored now, its prediction would come after rows logged after it, and prediction ids are
+# the ledger's order. Uncorrelated: its own `l` and `f`.
+NEWEST = sql.SQL("""(SELECT max(l.seq) FROM {ledger} l {fx} JOIN predictions o ON o.fixture_id = f.id
+                     JOIN models om ON om.id = o.model_id
+                     WHERE om.name = {model} AND o.market = {market} AND o.line IS NOT DISTINCT FROM {line})""")
 
 
 def _with_result_columns(strategy: str, df: pd.DataFrame) -> pd.DataFrame:
@@ -243,6 +250,8 @@ class PostgresLedgers:
         lit["teams"] = TEAMS
         # The database refuses the prediction (0007), and its prices aren't pre-match: the row stays out.
         lit["before"] = sql.SQL("NOT {}").format(LATE)
+        lit["newest"] = NEWEST.format(ledger=lit["ledger"], fx=FIXTURE, model=lit["model"], market=lit["market"],
+                                      line=lit["line"])
         conn.execute(sql.SQL("""
             INSERT INTO competitions (code) SELECT DISTINCT league FROM {ledger} ON CONFLICT DO NOTHING;
 
@@ -264,7 +273,7 @@ class PostgresLedgers:
             WHERE NOT EXISTS (SELECT FROM predictions o JOIN models om ON om.id = o.model_id
                               WHERE om.name = {model} AND o.fixture_id = f.id AND o.market = {market}
                                 AND o.line IS NOT DISTINCT FROM {line})
-              AND {before}
+              AND {before} AND l.seq > COALESCE({newest}, 0)
             ORDER BY l.seq
             ON CONFLICT DO NOTHING;
 
@@ -301,11 +310,23 @@ class PostgresLedgers:
               AND (f.ou25 IS NULL OR f.ou25 = outcome_ou25(l.hg, l.ag));
         """).format(**lit))
 
+    def _left_out(self, strategy: str) -> sql.Composable:
+        """A ledger row `l` (fixture `f`) out of the record: logged at or after kick-off, or skipped as that when
+        saved (`NEWEST`)."""
+        market, line, _ = NORMALIZED[STRATEGIES[strategy]["market"]]
+        lit = {"model": sql.Literal(MODEL), "market": sql.Literal(market), "line": sql.Literal(line)}
+        return sql.SQL("""({late} OR (l.seq < {newest}
+                AND NOT EXISTS (SELECT FROM predictions o JOIN models om ON om.id = o.model_id
+                                WHERE om.name = {model} AND o.fixture_id = f.id AND o.market = {market}
+                                  AND o.line IS NOT DISTINCT FROM {line})))""").format(
+            late=LATE, newest=NEWEST.format(ledger=self._table(strategy), fx=FIXTURE, **lit), **lit)
+
     def late(self, strategy: str) -> int:
-        """Ledger rows logged at or after their game's kick-off: kept in the table, left out of the record."""
+        """Ledger rows logged at or after their game's kick-off (as known when saved, or now): kept in the table, left
+        out of the record."""
         with psycopg.connect(self._url) as conn:
-            return conn.execute(sql.SQL("SELECT count(*) FROM {t} l {fx} WHERE {late}").format(
-                t=self._table(strategy), fx=FIXTURE, late=LATE)).fetchone()[0]
+            return conn.execute(sql.SQL("SELECT count(*) FROM {t} l {fx} WHERE {out}").format(
+                t=self._table(strategy), fx=FIXTURE, out=self._left_out(strategy))).fetchone()[0]
 
     def diff(self, strategy: str) -> int:
         """Rows that differ between the ledger table and its view, either way, or that are out of order.
@@ -316,8 +337,8 @@ class PostgresLedgers:
         """
         with psycopg.connect(self._url) as conn:
             all_cols = sql.SQL(", ").join(map(sql.Identifier, ["seq"] + self.columns(conn, strategy)))
-            table = sql.SQL("(SELECT {c} FROM {t} l WHERE NOT EXISTS (SELECT FROM (SELECT) x {fx} WHERE {late}))").format(
-                c=all_cols, t=self._table(strategy), fx=FIXTURE, late=LATE)
+            table = sql.SQL("(SELECT {c} FROM {t} l WHERE NOT EXISTS (SELECT FROM (SELECT) x {fx} WHERE {out}))").format(
+                c=all_cols, t=self._table(strategy), fx=FIXTURE, out=self._left_out(strategy))
             cols = sql.SQL(", ").join(map(sql.Identifier, [c for c in self.columns(conn, strategy) if c not in SCORE]))
             view = sql.Identifier(f"v_ledger_{strategy}")
             n = conn.execute(sql.SQL("SELECT count(*) FROM ((SELECT {c} FROM {t} k EXCEPT ALL SELECT {c} FROM {v}) UNION ALL"

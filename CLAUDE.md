@@ -18,7 +18,8 @@ with what was rejected) and add a line below.
   `fixtures.csv` kick-off has passed; migration 0007 (`kicked_off()` + trigger) refuses a prediction at or after its
   game's kick-off; migration 0008 leaves the ones stored earlier (21 from the 2026-10-30 23:32 run) out of
   `v_ledger_*` (the site and API). They stay in `predictions`, `ledger_*` and the CSV export/backup;
-  `python -m api.sync check` counts them as late. Don't re-log or backfill past games. `docs/phase3-plan.md`, "1: rows already logged after kick-off".
+  `python -m api.sync check` counts them as late. Don't re-log or backfill past games. A row skipped as late stays out
+  if the kick-off later moves later (`api.ledgers.NEWEST`). `docs/phase3-plan.md`, "1: rows already logged after kick-off".
 - **2026-11-13: `logged_at` is UTC** (naive in the CSVs; the database reads it as UTC).
 - **2026-11-13: a club game moved by a day is the same game** (`model.paper.NEAR`, ingest's 1-day rule) in settle, log
   and the football-data import; `python -m ingest dedupe` folds duplicates. `docs/phase3-plan.md`, "0a".

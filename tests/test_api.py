@@ -74,6 +74,7 @@ def test_serves_frontend_build(tmp_path, ledger_dir):
 
     r = web.get("/")
     assert r.status_code == 200 and r.text.startswith("<!doctype html>") and r.headers["cache-control"] == "no-cache"
+    assert web.head("/").status_code == 200                               # uptime checks and link previews send HEAD
     assert web.get("/assets/index-abc.js").text == "console.log(1)"
     assert web.get("/assets/missing.js").status_code == 404
     problem(web.get("/api/v1/nope"), 404, "not_found")                   # the API keeps its own 404s

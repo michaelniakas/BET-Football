@@ -255,7 +255,7 @@ def create_app(ledgers: uc.Ledgers, odds: uc.LiveOdds,
         # leaves browsers on an old page that points at assets which no longer exist.
         app.mount("/assets", StaticFiles(directory=web / "assets"), name="assets")
 
-        @app.get("/", include_in_schema=False)
+        @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
         def index() -> FileResponse:
             return FileResponse(web / "index.html", headers={"Cache-Control": "no-cache"})
 
