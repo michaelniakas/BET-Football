@@ -293,11 +293,14 @@ def _probability_scores(d: pd.DataFrame, market: str, spec: dict) -> dict:
     y = d[spec["target"]].map({o: i for i, o in enumerate(spec["outcomes"])}).to_numpy()
     p = {src: d[cols].to_numpy(dtype=float) for src, cols in _prob_cols(spec).items()}
     on_result = {src: a[np.arange(len(d)), y] for src, a in p.items()}
+    # Per-match log-loss gap, clipped as model.backtest scores it: its mean is pre-match log_loss minus the model's.
+    gap = np.log(np.clip(on_result["market_pre_match"], 1e-12, 1)) - np.log(np.clip(on_result["model"], 1e-12, 1))
     return {"n": int(rep.n.iloc[0]),
             "rows": [{"source": PROB_SOURCES[i], "log_loss": r.log_loss, "brier": r.brier,
                       "favourite_hit_rate": _favourite_hits(p[PROB_SOURCES[i]], y)}
                      for i, r in rep.iterrows()],
-            "model_closer_rate": float((on_result["model"] > on_result["market_pre_match"]).mean())}
+            "model_closer_rate": float((on_result["model"] > on_result["market_pre_match"]).mean()),
+            "log_loss_gap_se": float(gap.std(ddof=1) / np.sqrt(len(gap))) if len(gap) > 1 else None}
 
 
 def _calibration(d: pd.DataFrame, spec: dict) -> list[dict]:
@@ -317,7 +320,7 @@ def probability_report(ledgers: Ledgers, strategy: str) -> dict:
     if settled.empty:                          # model.backtest.probability_report cannot score zero rows
         return {"n": 0, "rows": [{"source": s, "log_loss": None, "brier": None, "favourite_hit_rate": None}
                                  for s in PROB_SOURCES.values()],
-                "model_closer_rate": None, "calibration": [], "by_league": []}
+                "model_closer_rate": None, "log_loss_gap_se": None, "calibration": [], "by_league": []}
     return {**_probability_scores(settled, market, spec), "calibration": _calibration(settled, spec),
             "by_league": [{"league": lg, **_probability_scores(g, market, spec)} for lg, g in settled.groupby("league")]}
 

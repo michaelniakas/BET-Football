@@ -496,7 +496,7 @@ components:
 
     ProbabilityScores:
       type: object
-      required: [n, rows, model_closer_rate]
+      required: [n, rows, model_closer_rate, log_loss_gap_se]
       properties:
         n:
           type: integer
@@ -526,6 +526,14 @@ components:
           description: >-
             Share of the matches where the model gave the outcome that happened a higher probability than
             the pre-match market did. Null when `n` is 0.
+        log_loss_gap_se:
+          type: [number, "null"]
+          minimum: 0
+          description: >-
+            Standard error of the mean per-match log-loss gap between the pre-match market and the model (the
+            sample standard deviation of the gaps over the square root of `n`). The gap between the two
+            `log_loss` rows is a real difference only when it is at least twice this; smaller is noise. Null
+            when `n` is below 2.
 
     ProbabilityReport:
       allOf:

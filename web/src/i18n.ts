@@ -3,6 +3,8 @@
 
 const en = {
   appTitle: "BET-Football",
+  notice: "Research project with paper bets only: no money is staked here. Betting can be addictive and is for adults (18+) only.",
+  noticeHelp: "Where to get help (Hellenic Gaming Commission)",
   mainNav: "Main",
   navPicks: "Picks",
   navResults: "Results",
@@ -244,15 +246,18 @@ const en = {
   sCloser: "Closer than bookies",
   sCloserSub: "of matches",
   accAhead: "Ahead of the bookmakers",
-  accBehind: "Slightly behind",
-  accAheadText: "Over all finished matches the model's percentages were more accurate than the bookmakers' before kick-off. Keep watching: the sample is still growing.",
+  accBehind: "Behind the bookmakers",
+  accAheadText: "Over {n} finished matches the model's percentages were more accurate than the bookmakers' before kick-off, by more than chance would explain.",
   accBehindText:
-    "The bookmakers' prices are still a little more accurate overall. That's normal: beating them on average is very hard. The model only needs to be better on some matches, and the bets show whether it finds them.",
+    "Over {n} finished matches the bookmakers' prices were more accurate, by more than chance would explain. That's normal: beating them on average is very hard. The model only needs to be better on some matches, and the bets show whether it finds them.",
+  accEvenText:
+    "Over {n} finished matches the model and the bookmakers' prices before kick-off were about as accurate: the gap between them is within what chance alone gives. Keep watching: the sample is still growing.",
   calibEyebrow: "Calibration",
   calibTitle: "When the model says X%, does it happen X% of the time?",
   calibHelp: "Dots on the line mean its percentages can be taken at face value. Bigger dot = more matches.",
   leagueErrTitle: "Prediction error, model vs bookmakers",
-  leagueErrHelp: "Green: the model was more accurate there.",
+  leagueErrHelp: "Green: the model was more accurate there, by more than chance would explain (leagues with 30+ matches).",
+  newTab: "(opens in a new tab)",
   nMatches: "{n} matches",
   bookiesLL: "bookies {v}",
   modelLL: "model {v}",
@@ -330,6 +335,8 @@ export type Key = keyof typeof en;
 
 const el: Record<Key, string> = {
   appTitle: "BET-Football",
+  notice: "Ερευνητικό έργο μόνο με εικονικά στοιχήματα: εδώ δεν παίζονται χρήματα. Ο τζόγος μπορεί να γίνει εθισμός και επιτρέπεται μόνο σε ενήλικες (18+).",
+  noticeHelp: "Πού θα βρεις βοήθεια (ΕΕΕΠ)",
   mainNav: "Κύριο μενού",
   navPicks: "Προτάσεις",
   navResults: "Αποτελέσματα",
@@ -567,16 +574,19 @@ const el: Record<Key, string> = {
   sCloser: "Πιο κοντά από τις στοιχηματικές",
   sCloserSub: "των αγώνων",
   accAhead: "Μπροστά από τις στοιχηματικές",
-  accBehind: "Λίγο πίσω",
+  accBehind: "Πίσω από τις στοιχηματικές",
   accAheadText:
-    "Σε όλους τους αγώνες που έληξαν τα ποσοστά του μοντέλου ήταν πιο ακριβή από αυτά των στοιχηματικών πριν τη σέντρα. Συνέχισε να παρακολουθείς: το δείγμα μεγαλώνει ακόμα.",
+    "Σε {n} αγώνες που έληξαν τα ποσοστά του μοντέλου ήταν πιο ακριβή από αυτά των στοιχηματικών πριν τη σέντρα, περισσότερο απ' όσο εξηγεί η τύχη.",
   accBehindText:
-    "Οι τιμές των στοιχηματικών είναι ακόμα λίγο πιο ακριβείς συνολικά. Είναι φυσιολογικό: το να τις νικήσεις κατά μέσο όρο είναι πολύ δύσκολο. Το μοντέλο χρειάζεται να είναι καλύτερο μόνο σε κάποιους αγώνες, και τα στοιχήματα δείχνουν αν τους βρίσκει.",
+    "Σε {n} αγώνες που έληξαν οι τιμές των στοιχηματικών ήταν πιο ακριβείς, περισσότερο απ' όσο εξηγεί η τύχη. Είναι φυσιολογικό: το να τις νικήσεις κατά μέσο όρο είναι πολύ δύσκολο. Το μοντέλο χρειάζεται να είναι καλύτερο μόνο σε κάποιους αγώνες, και τα στοιχήματα δείχνουν αν τους βρίσκει.",
+  accEvenText:
+    "Σε {n} αγώνες που έληξαν το μοντέλο και οι τιμές των στοιχηματικών πριν τη σέντρα ήταν περίπου εξίσου ακριβή: η διαφορά τους είναι μέσα σε ό,τι δίνει η τύχη μόνη της. Συνέχισε να παρακολουθείς: το δείγμα μεγαλώνει ακόμα.",
   calibEyebrow: "Βαθμονόμηση",
   calibTitle: "Όταν το μοντέλο λέει Χ%, συμβαίνει το Χ% των φορών;",
   calibHelp: "Κουκκίδες πάνω στη γραμμή σημαίνουν ότι τα ποσοστά του διαβάζονται όπως είναι. Μεγαλύτερη κουκκίδα = περισσότεροι αγώνες.",
   leagueErrTitle: "Σφάλμα πρόβλεψης, μοντέλο vs στοιχηματικές",
-  leagueErrHelp: "Πράσινο: εκεί το μοντέλο ήταν πιο ακριβές.",
+  leagueErrHelp: "Πράσινο: εκεί το μοντέλο ήταν πιο ακριβές, περισσότερο απ' όσο εξηγεί η τύχη (λίγκες με 30+ αγώνες).",
+  newTab: "(ανοίγει σε νέα καρτέλα)",
   nMatches: "{n} αγώνες",
   bookiesLL: "στοιχηματικές {v}",
   modelLL: "μοντέλο {v}",

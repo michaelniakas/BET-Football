@@ -118,6 +118,7 @@ a { color: var(--accent); }
 
 main { min-width: 0; padding-block: 36px 120px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 .page { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+.notice { max-width: 1180px; margin: 56px auto 0; padding-top: 18px; border-top: 1px solid var(--line); }
 .section { display: flex; flex-direction: column; gap: 18px; }
 [hidden] { display: none !important; }              /* a display rule on a class must not reveal hidden panels */
 .section-head { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; justify-content: space-between; }

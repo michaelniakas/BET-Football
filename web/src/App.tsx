@@ -60,6 +60,11 @@ function defaultRule(s: Schemas["Strategy"]): Rule {
   return { edge: s.default_min_edge, book: s.books.includes("avg") ? "avg" : (s.books[0] ?? "avg") };
 }
 
+/** The regulator's own list of support services (ΕΟΠΑΕ advice line, Gamblers Anonymous), checked 2026-11-13. */
+const HELP = "https://hgc.gov.gr/%ce%ba%ce%bf%ce%b9%ce%bd%cf%8c-%ce%ba%ce%b1%ce%b9-%cf%80%ce%b1%ce%af%ce%ba%cf%84%ce%b5%cf%82/"
+  + "%cf%85%cf%80%ce%b5%cf%8d%ce%b8%cf%85%ce%bd%ce%bf-%cf%80%ce%b1%ce%b9%cf%87%ce%bd%ce%af%ce%b4%ce%b9/"
+  + "%ce%b4%ce%bf%ce%bc%ce%ad%cf%82-%cf%83%cf%84%ce%ae%cf%81%ce%b9%ce%be%ce%b7%cf%82/";
+
 export function App() {
   const [{ page, lang }, setNav] = useState(fromUrl);
   const [theme, setTheme] = useState<Theme | null>(storedTheme);
@@ -176,6 +181,12 @@ export function App() {
             <GlossPopovers />
           </AppCtx.Provider>
         )}
+        <footer className="notice muted small">
+          {t("notice")}{" "}
+          <a href={HELP} target="_blank" rel="noopener noreferrer">
+            {t("noticeHelp")}<span className="visually-hidden"> {t("newTab")}</span>
+          </a>
+        </footer>
       </main>
     </div>
   );
