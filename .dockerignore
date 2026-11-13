@@ -3,6 +3,7 @@
 !openapi.yaml
 !api/
 !model/
+!ingest/
 !web/
 web/node_modules/
 web/dist/

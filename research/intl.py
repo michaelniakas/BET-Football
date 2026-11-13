@@ -20,7 +20,7 @@ import requests
 from model import backtest
 from model.live_odds import API_URL, LIVE_COLS, parse, similarity
 from model.paper import STRATEGIES
-from research.espn import INTL, URL, fixtures
+from ingest.espn import INTL, URL, fixtures
 
 HERE = pathlib.Path(__file__).parent
 ODDS = HERE / "odds_intl.csv"

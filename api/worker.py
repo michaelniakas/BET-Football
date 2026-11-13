@@ -1,11 +1,14 @@
-"""The paper-trading job on Toft, in place of .github/workflows/paper-trading.yml.
+"""The paper-trading job on Toft, in place of .github/workflows/paper-trading.yml, and the ingest jobs.
 
-    python -m api.worker         # run every Tue + Fri 07:00 UTC slot, forever (the worker's start command)
+    python -m api.worker         # run every slot of every job, forever (the worker's start command)
     python -m api.worker once    # one run now, outside the schedule
 
 `model/` runs unchanged, as it did on a GitHub runner: in a writable copy under WORKER_DIR (the worker's
 volume, which also keeps the downloaded seasons and a CSV backup of the ledgers), with the ledgers
 exported from Postgres before the run and written back after it. Connection string from DATABASE_URL.
+
+The ingest jobs (docs/phase2-plan.md) run `python -m ingest <job>` at their own daily slots, never on a paper
+slot: the worker before this one looks a paper slot up without its job.
 """
 from __future__ import annotations
 
@@ -31,24 +34,33 @@ HOUR = 7                            # UTC
 JOB = [sys.executable, "-m", "model.paper", "weekly"]
 JOB_TIMEOUT = 30 * 60               # seconds: the workflow's timeout-minutes
 RETRY = timedelta(hours=1)          # after a run that could not finish
+ROOT = MODEL.parent
+DAILY = range(7)
+# Ingest job -> its UTC times of day, in run order: results and fixtures before the prices that need them.
+INGEST = {
+    "football-data": (timedelta(hours=5),),
+    "martj42": (timedelta(hours=6),),
+    "espn": (timedelta(hours=6),),
+    "odds": (timedelta(hours=6, minutes=30), timedelta(hours=11), timedelta(hours=15),
+             timedelta(hours=18, minutes=30)),
+}
+INGEST_TIMEOUT = 15 * 60            # seconds: an ESPN run takes ~4 minutes; football-data stops at 10 (FD_BUDGET)
 
 
-def due_slot(now: datetime) -> datetime:
+def _slots(now: datetime, days, times, span: range):
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return [midnight + timedelta(days=d) + t for d in span for t in times
+            if (midnight + timedelta(days=d)).weekday() in days]
+
+
+def due_slot(now: datetime, days=DAYS, times=(timedelta(hours=HOUR),)) -> datetime:
     """The latest slot at or before `now` (UTC)."""
-    slot = now.replace(hour=HOUR, minute=0, second=0, microsecond=0)
-    if slot > now:
-        slot -= timedelta(days=1)
-    while slot.weekday() not in DAYS:
-        slot -= timedelta(days=1)
-    return slot
+    return max(s for s in _slots(now, days, times, range(-7, 1)) if s <= now)
 
 
-def next_slot(now: datetime) -> datetime:
+def next_slot(now: datetime, days=DAYS, times=(timedelta(hours=HOUR),)) -> datetime:
     """The first slot after `now` (UTC)."""
-    slot = due_slot(now) + timedelta(days=1)
-    while slot.weekday() not in DAYS:
-        slot += timedelta(days=1)
-    return slot
+    return min(s for s in _slots(now, days, times, range(0, 8)) if s > now)
 
 
 def run_once(pg: PostgresLedgers, workdir: Path, job: list[str] = JOB) -> bool:
@@ -80,7 +92,7 @@ def tick(url: str, workdir: Path, now: datetime, job: list[str] = JOB) -> None:
     """
     slot = due_slot(now)
     with psycopg.connect(url) as conn:
-        if conn.execute("SELECT 1 FROM paper_runs WHERE slot = %s", (slot,)).fetchone():
+        if conn.execute("SELECT 1 FROM paper_runs WHERE job = 'paper' AND slot = %s", (slot,)).fetchone():
             return
     log.info("slot %s: running", slot.isoformat())
     ok = run_once(PostgresLedgers(url), workdir, job)
@@ -91,6 +103,31 @@ def tick(url: str, workdir: Path, now: datetime, job: list[str] = JOB) -> None:
         log.info("slot %s: done", slot.isoformat())
     else:
         log.error("slot %s: the job exited non-zero (see its output above); not run again", slot.isoformat())
+
+
+def ingest_tick(url: str, job: str, now: datetime, cmd: list[str] | None = None) -> None:
+    """Run the ingest job's due slot unless it already ran.
+
+    Exit 1 (names to confirm, a disagreeing score, or a failed source) and a timeout are logged and not run
+    again in this slot: every run re-reads a window of days, so the next slot catches up what this one missed.
+    A job is one transaction per import, so a killed one leaves only whole imports behind.
+    """
+    slot = due_slot(now, DAILY, INGEST[job])
+    with psycopg.connect(url) as conn:
+        if conn.execute("SELECT 1 FROM paper_runs WHERE job = %s AND slot = %s", (job, slot)).fetchone():
+            return
+    log.info("%s slot %s: running", job, slot.isoformat())
+    try:
+        code = subprocess.run(cmd or [sys.executable, "-m", "ingest", job], cwd=ROOT, timeout=INGEST_TIMEOUT,
+                              env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}).returncode
+        outcome = f"exited {code}"
+    except subprocess.TimeoutExpired:
+        code, outcome = None, f"killed after {INGEST_TIMEOUT} s"
+    with psycopg.connect(url) as conn:
+        conn.execute("INSERT INTO paper_runs (job, slot) VALUES (%s, %s) ON CONFLICT DO NOTHING", (job, slot))
+    if code != 0:
+        log.error("%s slot %s: %s (see its output above; `python -m ingest unmapped`)", job,
+                  slot.isoformat(), outcome)
 
 
 def main() -> None:
@@ -106,12 +143,19 @@ def main() -> None:
         sys.exit(0 if run_once(PostgresLedgers(url), Path(workdir)) else 1)
     while True:
         now = datetime.now(UTC)
-        try:
+        wake = next_slot(now)
+        try:                        # first: a hanging source must not delay the paper run
             tick(url, Path(workdir), now)
-            wake = next_slot(now)
         except Exception:           # database, disk or a hung download must not end the schedule
             log.exception("the run did not finish, trying again")
-            wake = min(now + RETRY, next_slot(now))
+            wake = min(wake, now + RETRY)
+        for job, times in INGEST.items():
+            wake = min(wake, next_slot(now, DAILY, times))
+            try:
+                ingest_tick(url, job, now)
+            except Exception:       # one job's failure must not stop the others or the schedule
+                log.exception("%s did not finish, trying again", job)
+                wake = min(wake, now + RETRY)
         log.info("next look at %s", wake.isoformat(timespec="seconds"))
         time.sleep(max(0.0, (wake - datetime.now(UTC)).total_seconds()))
 

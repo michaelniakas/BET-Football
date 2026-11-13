@@ -43,7 +43,7 @@ def test_backfill_from_ledger_tables(pg: PostgresLedgers, pg_url: str, ledger_di
         pg.save(s, csv.read(s))
     saved = {s: pg.read(s) for s in ("1x2", "ou25")}
     with psycopg.connect(pg_url) as conn:
-        conn.execute("TRUNCATE competitions, teams, team_aliases, fixtures, models, predictions, odds_snapshots,"
+        conn.execute("TRUNCATE competitions, teams, team_aliases, fixtures, fixture_refs, models, predictions, odds_snapshots,"
                      " market_probs RESTART IDENTITY")
     assert pg.read("1x2").empty
     for _ in range(2):

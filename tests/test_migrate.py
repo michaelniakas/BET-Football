@@ -10,7 +10,7 @@ from api import migrate
 from tests.conftest import FIXTURES
 
 TABLES = {"ledger_1x2", "ledger_ou25", "paper_runs", "competitions", "teams", "team_aliases", "fixtures", "models",
-          "predictions", "odds_snapshots", "market_probs", "v_ledger_1x2", "v_ledger_ou25"}
+          "predictions", "odds_snapshots", "market_probs", "v_ledger_1x2", "v_ledger_ou25", "unmapped_names", "fixture_refs"}
 
 
 def tables(url: str) -> set[str]:
@@ -158,12 +158,90 @@ BAD_NORMALIZED = {
     "prediction rewritten": "UPDATE predictions SET p = '{0.4,0.3,0.3}' WHERE market = '1x2'",
     "odds rewritten": "UPDATE odds_snapshots SET prices = '{2,3.4,4}'",
     "market probabilities rewritten": "UPDATE market_probs SET p = '{0.4,0.3,0.3}'",
+    # 0005
+    "kick-off two days off the date": "UPDATE fixtures SET kickoff = '2026-11-10 15:00Z'",
+    "unknown way of deciding": "UPDATE fixtures SET decided = 'golden_goal'",
+    "unknown team kind": "UPDATE teams SET kind = 'women' WHERE id = 1",
+    "unknown competition kind": "UPDATE competitions SET kind = 'cup'",
+    "paper slot twice": "INSERT INTO paper_runs (slot) VALUES ('2026-11-06 07:00Z'), ('2026-11-06 07:00Z')",
+    "one ESPN event, two fixtures": "INSERT INTO fixtures (competition_id, season, date, home_id, away_id) "
+        "VALUES (1, 2026, '2026-11-20', 2, 1); INSERT INTO fixture_refs VALUES ('espn', '1', 1), ('espn', '1', 2)",
+    "two ESPN events, one fixture": "INSERT INTO fixture_refs VALUES ('espn', '1', 1), ('espn', '2', 1)",
+    "queued name never seen": "INSERT INTO unmapped_names (source, name, kind, competition, seen) "
+        "VALUES ('espn', 'Arsenal FC', 'club', 'E0', 0)",
+    # 0006
+    "unknown odds kind": "INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'avg', NULL, "
+        "'{2,3.5,4}', 'opening')",
+    "second untimed pre-match price": "INSERT INTO odds_snapshots VALUES "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2,3.5,4}', 'pre_match'), "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}', 'pre_match')",
+    "second closing price": "INSERT INTO odds_snapshots VALUES "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2,3.5,4}', 'closing'), "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}', 'closing')",
+    "untimed price rewritten": "INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'max', NULL, "
+        "'{2,3.5,4}', 'closing'); UPDATE odds_snapshots SET prices = '{2,3.6,4}' WHERE kind = 'closing'",
 }
 
 GOOD_NORMALIZED = {
     "score withdrawn": "UPDATE fixtures SET hg = NULL, ag = NULL",
     "match moved, predictions follow": "UPDATE fixtures SET date = '2026-11-09'",
+    # 0005
+    "kick-off the evening before (UTC)": "UPDATE fixtures SET kickoff = '2026-11-07 23:30Z', decided = 'regular'",
+    "another job's slot": "INSERT INTO paper_runs (job, slot) VALUES ('espn', '2026-11-06 06:00Z')",
+    # 0006
+    "untimed pre-match price beside a timed one": "INSERT INTO odds_snapshots VALUES "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}')",
+    "closing price, same book": "INSERT INTO odds_snapshots VALUES "
+        "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}', 'closing')",
 }
+
+
+def test_down_removes_untimed_and_closing_prices_only(fixture_row: psycopg.Connection, pg_url: str):
+    fixture_row.execute("""
+        INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'b365', NULL, '{2,3.5,4}', 'pre_match'),
+                                          (1, '1x2', NULL, 'football-data', 'b365', NULL, '{2,3.4,4}', 'closing'),
+                                          (1, '1x2', NULL, 'the-odds-api', 'b365', '2026-11-08Z', '{2,3.4,4}', 'closing')
+    """)
+    fixture_row.commit()
+    assert migrate.down(pg_url) == "0006_untimed_odds"
+    with psycopg.connect(pg_url) as conn:
+        assert conn.execute("SELECT bookmaker, captured_at IS NOT NULL FROM odds_snapshots").fetchall() == [("avg", True)]
+    assert migrate.up(pg_url) == ["0006_untimed_odds"]
+
+
+def test_old_worker_insert_still_works(fixture_row: psycopg.Connection):
+    """The 0004 worker keeps running beside 0005 during a deploy: its insert and lookup have no `job`."""
+    for _ in range(2):
+        fixture_row.execute("INSERT INTO paper_runs (slot) VALUES ('2026-11-06 07:00Z') ON CONFLICT DO NOTHING")
+    assert fixture_row.execute("SELECT job FROM paper_runs WHERE slot = '2026-11-06 07:00Z'").fetchall() == [("paper",)]
+
+
+def test_alias_clears_the_queue(fixture_row: psycopg.Connection):
+    fixture_row.execute("INSERT INTO unmapped_names (source, name, kind, competition) VALUES "
+                        "('espn', 'Arsenal FC', 'club', 'E0'), ('espn', 'Chelsea FC', 'club', 'E0')")
+    fixture_row.execute("INSERT INTO team_aliases VALUES ('espn', 'Arsenal FC', 1)")
+    assert fixture_row.execute("SELECT name FROM unmapped_names").fetchall() == [("Chelsea FC",)]
+
+
+def test_down_removes_international_data_only(fixture_row: psycopg.Connection, pg_url: str):
+    fixture_row.execute("""
+        INSERT INTO competitions (code, name, kind) VALUES ('Friendly', 'Friendly', 'international');
+        INSERT INTO teams (name, kind) VALUES ('Greece', 'national'), ('Cyprus', 'national');
+        INSERT INTO team_aliases VALUES ('martj42', 'Greece', 3), ('martj42', 'Cyprus', 4);
+        INSERT INTO fixtures (competition_id, season, date, home_id, away_id, hg, ag)
+            VALUES (2, 2026, '2026-11-14', 3, 4, 1, 0);
+        INSERT INTO odds_snapshots VALUES (2, '1x2', NULL, 'the-odds-api', 'avg', '2026-11-13Z', '{1.5,4,6}');
+        INSERT INTO paper_runs (job, slot) VALUES ('espn', '2026-11-12 06:00Z'), ('paper', '2026-11-10 07:00Z');
+    """)
+    fixture_row.commit()
+    assert migrate.down(pg_url) == "0006_untimed_odds"
+    assert migrate.down(pg_url) == "0005_ingestion"
+    with psycopg.connect(pg_url) as conn:
+        counts = conn.execute("SELECT (SELECT count(*) FROM fixtures), (SELECT count(*) FROM teams),"
+                              " (SELECT count(*) FROM team_aliases), (SELECT count(*) FROM odds_snapshots),"
+                              " (SELECT count(*) FROM competitions), (SELECT array_agg(slot) FROM paper_runs)").fetchone()
+    assert counts[:5] == (1, 2, 2, 1, 1)
+    assert len(counts[5]) == 1
 
 
 @pytest.mark.parametrize("stmt", BAD_NORMALIZED.values(), ids=BAD_NORMALIZED.keys())

@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY openapi.yaml .
 COPY api/ api/
 COPY model/ model/
+COPY ingest/ ingest/
 COPY --from=web /src/web/dist web/dist
 USER app
 EXPOSE 7860

@@ -132,3 +132,62 @@ def test_app_reads_postgres_when_database_url_is_set(pg_ledger_url: str, ledger_
     catalog = TestClient(from_env()).get("/api/v1/catalog").json()
     assert {s["id"]: s["ledger"]["matches"] for s in catalog["strategies"]} == {
         s: len(CsvLedgers(ledger_dir).read(s)) for s in ("ou25", "1x2")}
+
+
+ODDS = worker.INGEST["odds"]
+
+
+@pytest.mark.parametrize("now, due, nxt", [
+    (utc(10, 6, 29), utc(9, 18, 30), utc(10, 6, 30)),      # before the day's first: yesterday's last
+    (utc(10, 6, 30), utc(10, 6, 30), utc(10, 11)),         # exactly on a slot
+    (utc(10, 16), utc(10, 15), utc(10, 18, 30)),
+    (utc(10, 23, 59), utc(10, 18, 30), utc(11, 6, 30)),
+])
+def test_ingest_slots(now: datetime, due: datetime, nxt: datetime):
+    assert worker.due_slot(now, worker.DAILY, ODDS) == due
+    assert worker.next_slot(now, worker.DAILY, ODDS) == nxt
+
+
+def test_no_ingest_job_runs_on_a_paper_slot():
+    # The previous worker looks a paper slot up without its job: another job's row there would skip a paper run.
+    assert all(timedelta(hours=worker.HOUR) not in times for times in worker.INGEST.values())
+
+
+def test_football_data_budget_leaves_room_for_its_last_file():
+    from ingest import __main__ as cli
+    assert cli.FD_BUDGET + 3 * 60 <= worker.INGEST_TIMEOUT       # a file: a 60 s fetch timeout, then its import
+
+
+def ingest_runs(url: str) -> list[tuple[str, datetime]]:
+    with psycopg.connect(url) as conn:
+        return conn.execute("SELECT job, slot FROM paper_runs ORDER BY job, slot").fetchall()
+
+
+def note(path: Path, code: int = 0, sleep: int = 0) -> list[str]:
+    """Stands in for `python -m ingest <job>`: leaves a file behind, then exits with `code`."""
+    return [sys.executable, "-c", f"import pathlib, sys, time; pathlib.Path({str(path)!r}).touch();"
+                                  f" time.sleep({sleep}); sys.exit({code})"]
+
+
+def test_ingest_tick_runs_a_slot_once_and_leaves_paper_alone(pg: PostgresLedgers, pg_url: str, tmp_path):
+    ran = tmp_path / "ran"
+    worker.ingest_tick(pg_url, "odds", utc(10, 12), note(ran, code=1))     # exit 1: logged, recorded
+    assert ran.exists() and ingest_runs(pg_url) == [("odds", utc(10, 11))]
+    ran.unlink()
+    worker.ingest_tick(pg_url, "odds", utc(10, 14), note(ran))             # same slot after a restart
+    assert not ran.exists()
+    worker.ingest_tick(pg_url, "espn", utc(10, 14), note(ran))             # another job, its own slot
+    assert ran.exists() and ingest_runs(pg_url) == [("espn", utc(10, 6)), ("odds", utc(10, 11))]
+    assert runs_paper(pg_url) == []
+
+
+def runs_paper(url: str) -> list[datetime]:
+    with psycopg.connect(url) as conn:
+        return [r[0] for r in conn.execute("SELECT slot FROM paper_runs WHERE job = 'paper'")]
+
+
+def test_an_ingest_job_killed_by_the_timeout_waits_for_its_next_slot(pg: PostgresLedgers, pg_url: str, tmp_path,
+                                                                     monkeypatch):
+    monkeypatch.setattr(worker, "INGEST_TIMEOUT", 1)
+    worker.ingest_tick(pg_url, "espn", utc(10, 12), note(tmp_path / "ran", sleep=60))
+    assert ingest_runs(pg_url) == [("espn", utc(10, 6))]
