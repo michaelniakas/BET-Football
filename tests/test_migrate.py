@@ -221,11 +221,12 @@ def test_down_removes_untimed_and_closing_prices_only(fixture_row: psycopg.Conne
                                           (1, '1x2', NULL, 'the-odds-api', 'b365', '2026-11-08Z', '{2,3.4,4}', 'closing')
     """)
     fixture_row.commit()
+    assert migrate.down(pg_url) == "0008_on_time_record"
     assert migrate.down(pg_url) == "0007_before_kickoff"
     assert migrate.down(pg_url) == "0006_untimed_odds"
     with psycopg.connect(pg_url) as conn:
         assert conn.execute("SELECT bookmaker, captured_at IS NOT NULL FROM odds_snapshots").fetchall() == [("avg", True)]
-    assert migrate.up(pg_url) == ["0006_untimed_odds", "0007_before_kickoff"]
+    assert migrate.up(pg_url) == ["0006_untimed_odds", "0007_before_kickoff", "0008_on_time_record"]
 
 
 def test_old_worker_insert_still_works(fixture_row: psycopg.Connection):
@@ -253,6 +254,7 @@ def test_down_removes_international_data_only(fixture_row: psycopg.Connection, p
         INSERT INTO paper_runs (job, slot) VALUES ('espn', '2026-11-12 06:00Z'), ('paper', '2026-11-10 07:00Z');
     """)
     fixture_row.commit()
+    assert migrate.down(pg_url) == "0008_on_time_record"
     assert migrate.down(pg_url) == "0007_before_kickoff"
     assert migrate.down(pg_url) == "0006_untimed_odds"
     assert migrate.down(pg_url) == "0005_ingestion"

@@ -22,6 +22,15 @@ log = logging.getLogger(__name__)
 GITHUB_MAIN = "https://raw.githubusercontent.com/michaelniakas/BET-Football/main/model/paper"
 TIMEOUT = (3.05, 5)             # connect, read (seconds)
 
+# A ledger row `l`'s fixture, by football-data's names.
+TEAMS = sql.SQL("""JOIN competitions c ON c.code = l.league
+            JOIN team_aliases th ON (th.source, th.name) = ('football-data', l.home)
+            JOIN team_aliases ta ON (ta.source, ta.name) = ('football-data', l.away)""")
+FIXTURE = sql.SQL("{} JOIN fixtures f ON (f.competition_id, f.date, f.home_id, f.away_id)"
+                  " = (c.id, l.date, th.team_id, ta.team_id)").format(TEAMS)
+# Logged at or after its game's kick-off: not in the record (0007 refuses it, 0008 leaves a stored one out of v_ledger_*).
+LATE = sql.SQL("kicked_off(f.id, l.logged_at AT TIME ZONE 'UTC')")
+
 
 def _with_result_columns(strategy: str, df: pd.DataFrame) -> pd.DataFrame:
     spec = MARKETS[STRATEGIES[strategy]["market"]]
@@ -128,13 +137,15 @@ class PostgresLedgers:
             self._columns[strategy] = [r[0] for r in rows]
         return self._columns[strategy]
 
-    def read(self, strategy: str) -> pd.DataFrame:
-        """Callers must not mutate the returned frame (same contract as `CsvLedgers.read`)."""
-        self._table(strategy)                                   # an unknown strategy is a KeyError
+    def read(self, strategy: str, with_late: bool = False) -> pd.DataFrame:
+        """The record (`v_ledger_*`), or with `with_late` the whole ledger table, rows logged after kick-off
+        included. Callers must not mutate the returned frame (same contract as `CsvLedgers.read`)."""
+        table = self._table(strategy)                           # an unknown strategy is a KeyError
         with psycopg.connect(self._url) as conn:
             cols = self.columns(conn, strategy)
             rows = conn.execute(sql.SQL("SELECT {} FROM {} ORDER BY seq").format(
-                sql.SQL(", ").join(map(sql.Identifier, cols)), sql.Identifier(f"v_ledger_{strategy}"))).fetchall()
+                sql.SQL(", ").join(map(sql.Identifier, cols)),
+                table if with_late else sql.Identifier(f"v_ledger_{strategy}"))).fetchall()
         if not rows:
             return pd.DataFrame()
         df = pd.DataFrame(rows, columns=cols)
@@ -227,16 +238,11 @@ class PostgresLedgers:
         lit["close"] = cols("close_", spec["suffixes"])
         lit["books"] = sql.SQL(", ").join(sql.SQL("({}, {})").format(sql.Literal(b), cols(f"{b}_", spec["suffixes"]))
                                           for b in FD_BOOKS)
-        teams = sql.SQL("""JOIN competitions c ON c.code = l.league
-            JOIN team_aliases th ON (th.source, th.name) = ('football-data', l.home)
-            JOIN team_aliases ta ON (ta.source, ta.name) = ('football-data', l.away)""")
-        lit["fx"] = sql.SQL("{teams} JOIN fixtures f ON (f.competition_id, f.date, f.home_id, f.away_id)"
-                            " = (c.id, l.date, th.team_id, ta.team_id)").format(teams=teams)
+        lit["fx"] = FIXTURE
         lit["same"] = sql.SQL("(f.competition_id, f.date, f.home_id, f.away_id) = (c.id, l.date, th.team_id, ta.team_id)")
-        lit["teams"] = teams
-        # Logged at or after kick-off: the database refuses the prediction (0007), and its prices aren't pre-match.
-        # The row is left out of the normalized tables, so `diff` reports it.
-        lit["before"] = sql.SQL("NOT kicked_off(f.id, l.logged_at AT TIME ZONE 'UTC')")
+        lit["teams"] = TEAMS
+        # The database refuses the prediction (0007), and its prices aren't pre-match: the row stays out.
+        lit["before"] = sql.SQL("NOT {}").format(LATE)
         conn.execute(sql.SQL("""
             INSERT INTO competitions (code) SELECT DISTINCT league FROM {ledger} ON CONFLICT DO NOTHING;
 
@@ -295,23 +301,32 @@ class PostgresLedgers:
               AND (f.ou25 IS NULL OR f.ou25 = outcome_ou25(l.hg, l.ag));
         """).format(**lit))
 
+    def late(self, strategy: str) -> int:
+        """Ledger rows logged at or after their game's kick-off: kept in the table, left out of the record."""
+        with psycopg.connect(self._url) as conn:
+            return conn.execute(sql.SQL("SELECT count(*) FROM {t} l {fx} WHERE {late}").format(
+                t=self._table(strategy), fx=FIXTURE, late=LATE)).fetchone()[0]
+
     def diff(self, strategy: str) -> int:
         """Rows that differ between the ledger table and its view, either way, or that are out of order.
 
         A score the view has and the table lacks is not a difference: it is the fixture's, known from the other
-        market's ledger. A score the table has and the view lacks or contradicts is.
+        market's ledger. A score the table has and the view lacks or contradicts is. A late row (`late`) is in the
+        table only, by design: not a difference.
         """
-        table = self._table(strategy)
         with psycopg.connect(self._url) as conn:
+            all_cols = sql.SQL(", ").join(map(sql.Identifier, ["seq"] + self.columns(conn, strategy)))
+            table = sql.SQL("(SELECT {c} FROM {t} l WHERE NOT EXISTS (SELECT FROM (SELECT) x {fx} WHERE {late}))").format(
+                c=all_cols, t=self._table(strategy), fx=FIXTURE, late=LATE)
             cols = sql.SQL(", ").join(map(sql.Identifier, [c for c in self.columns(conn, strategy) if c not in SCORE]))
             view = sql.Identifier(f"v_ledger_{strategy}")
-            n = conn.execute(sql.SQL("SELECT count(*) FROM ((SELECT {c} FROM {t} EXCEPT ALL SELECT {c} FROM {v}) UNION ALL"
-                                     " (SELECT {c} FROM {v} EXCEPT ALL SELECT {c} FROM {t})) d").format(
+            n = conn.execute(sql.SQL("SELECT count(*) FROM ((SELECT {c} FROM {t} k EXCEPT ALL SELECT {c} FROM {v}) UNION ALL"
+                                     " (SELECT {c} FROM {v} EXCEPT ALL SELECT {c} FROM {t} k)) d").format(
                 c=cols, t=table, v=view)).fetchone()[0]
             n += conn.execute(sql.SQL("SELECT count(*) FROM {t} t LEFT JOIN {v} v USING (date, league, home, away)"
                                       " WHERE t.hg IS NOT NULL AND (t.hg, t.ag) IS DISTINCT FROM (v.hg, v.ag)").format(
                 t=table, v=view)).fetchone()[0]
-            order = [sql.SQL("SELECT array_agg((date, league, home, away) ORDER BY seq) FROM {}").format(x)
+            order = [sql.SQL("SELECT array_agg((date, league, home, away) ORDER BY seq) FROM {} o").format(x)
                      for x in (table, view)]
             same_order = conn.execute(sql.SQL("SELECT ({}) IS NOT DISTINCT FROM ({})").format(*order)).fetchone()[0]
         return n + (0 if same_order else 1)

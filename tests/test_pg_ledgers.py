@@ -247,7 +247,7 @@ def test_export_of_empty_ledger_removes_stale_file(pg: PostgresLedgers, tmp_path
 
 
 def test_prediction_after_kickoff_left_out_of_the_tables(pg: PostgresLedgers, pg_url: str, ledger_dir):
-    """The database refuses it (0007); the save skips it so the rest still lands, and `diff` reports it."""
+    """The database refuses it (0007); the save skips it so the rest still lands, and `late` counts it."""
     csv = CsvLedgers(ledger_dir)
     one, ou = csv.read("1x2"), csv.read("ou25")
     pg.save("ou25", ou)                                     # creates the fixtures both ledgers share
@@ -260,7 +260,8 @@ def test_prediction_after_kickoff_left_out_of_the_tables(pg: PostgresLedgers, pg
                           AND (a.source, a.name, a.team_id) = ('football-data', %s, f.away_id)""",
                      (late.logged_at.to_pydatetime(), late.league, late.date.date(), late.home, late.away))
     assert pg.save("1x2", one) == (len(one), 0)
-    assert pg.diff("1x2") == 3                               # the row, its score and the order
+    assert pg.diff("1x2") == 0                               # late, not a difference
+    assert pg.late("1x2") == 1
     with psycopg.connect(pg_url) as conn:
         assert conn.execute("SELECT count(*) FROM v_ledger_1x2").fetchone()[0] == len(one) - 1
         assert conn.execute("SELECT count(*) FROM fixtures f JOIN odds_snapshots o ON o.fixture_id = f.id"
@@ -268,3 +269,38 @@ def test_prediction_after_kickoff_left_out_of_the_tables(pg: PostgresLedgers, pg
         assert conn.execute("SELECT count(*) FROM fixtures f JOIN market_probs m ON m.fixture_id = f.id"
                             " AND m.market = '1x2' AND m.kind = 'pre_match' WHERE m.captured_at >= f.kickoff"
                             ).fetchone()[0] == 0
+
+
+def _kickoff_at_logged_at(pg_url: str, row: pd.Series) -> None:
+    with psycopg.connect(pg_url) as conn:
+        conn.execute("""UPDATE fixtures f SET kickoff = %s AT TIME ZONE 'UTC'
+                        FROM competitions c, team_aliases h, team_aliases a
+                        WHERE c.id = f.competition_id AND c.code = %s AND f.date = %s
+                          AND (h.source, h.name, h.team_id) = ('football-data', %s, f.home_id)
+                          AND (a.source, a.name, a.team_id) = ('football-data', %s, f.away_id)""",
+                     (row.logged_at.to_pydatetime(), row.league, row.date.date(), row.home, row.away))
+
+
+def test_record_leaves_out_a_stored_prediction_made_after_kickoff(pg: PostgresLedgers, pg_url: str, ledger_dir,
+                                                                   monkeypatch, capsys, tmp_path):
+    """The 2026-10-30 run: stored before 0007, kick-off learned later. Out of the record (0008), counted as late."""
+    one = CsvLedgers(ledger_dir).read("1x2")
+    pg.save("1x2", one)
+    late = one.iloc[3]
+    _kickoff_at_logged_at(pg_url, late)
+    got = pg.read("1x2")
+    assert len(got) == len(one) - 1
+    assert (late.home, late.away) not in set(zip(got.home, got.away))
+    assert (pg.diff("1x2"), pg.late("1x2")) == (0, 1)
+    assert pg.save("1x2", one) == (0, 0)                     # the paper job's next save changes nothing
+    assert to_csv(pg, tmp_path) == {"1x2": len(one), "ou25": 0}      # the backup keeps it
+    assert to_postgres(pg, tmp_path) == {"1x2": (0, 0)}
+
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    monkeypatch.setattr(sys, "argv", ["api.sync", "check"])
+    main()                                                   # exit 0: late isn't a difference
+    assert "[1x2] 1 logged after kick-off, left out of v_ledger_1x2" in capsys.readouterr().out
+
+    assert migrate.down(pg_url) == "0008_on_time_record"     # back in the record
+    assert len(pg.read("1x2")) == len(one)
+    migrate.up(pg_url)
