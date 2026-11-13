@@ -1,5 +1,7 @@
 """The scheduled paper job must survive Understat being unreachable and one strategy crashing."""
+import os
 import sys
+import time
 
 import pandas as pd
 import pytest
@@ -142,10 +144,58 @@ def test_log_skips_a_logged_game_fixtures_csv_moved_by_a_day(tmp_path, monkeypat
     odds = {f"{b}_{s}": 2.0 for b in ("avg", "max", "b365", "ps", "bfe") for s in "hda"}
     fx = pd.DataFrame([{"date": d, "league": "SP2", "home": h, "away": "X", "season": 2026,
                         "p_H": 0.4, "p_D": 0.3, "p_A": 0.3, "mkt_h": 0.4, "mkt_d": 0.3, "mkt_a": 0.3, **odds}
-                       for h, d in (("Moved", day(2)), ("Far", day(3)))])
+                       for h, d in (("Moved", day(2)), ("Far", day(3)))]).assign(kickoff=pd.NaT)
+    fx["kickoff"] = fx.kickoff.dt.tz_localize("UTC")
     monkeypatch.setattr(model.paper, "score_fixtures", lambda *a: fx)
     monkeypatch.setattr(model.paper.backtest, "find_bets", lambda *a: pd.DataFrame())
 
     model.paper.log("1x2")
     got = model.paper.read_ledger("1x2")
     assert sorted(zip(got.home, got.date)) == [("Far", day(1)), ("Far", day(3)), ("Moved", day(1))]
+
+
+def test_load_fixtures_reads_uk_kickoff_as_utc(monkeypatch):
+    csv = ("Div,Date,Time,HomeTeam,AwayTeam\n"
+           "E0,14/11/2026,15:00,Winter,X\n"       # GMT
+           "E0,01/08/2026,15:00,Summer,X\n"       # BST
+           "E0,14/11/2026,,NoTime,X\n").encode()
+    monkeypatch.setattr(model.data.requests, "get", lambda *a, **kw: type("R", (), {
+        "content": csv, "raise_for_status": lambda self: None})())
+    got = model.data.load_fixtures(["E0"]).set_index("home").kickoff
+    assert got["Winter"] == pd.Timestamp("2026-11-14 15:00", tz="UTC")
+    assert got["Summer"] == pd.Timestamp("2026-08-01 14:00", tz="UTC")
+    assert pd.isna(got["NoTime"])
+
+
+def test_load_fixtures_without_any_kickoff_time(monkeypatch):
+    csv = b"Div,Date,Time,HomeTeam,AwayTeam\nE0,14/11/2026,,A,X\n"     # an all-blank column reads as float
+    monkeypatch.setattr(model.data.requests, "get", lambda *a, **kw: type("R", (), {
+        "content": csv, "raise_for_status": lambda self: None})())
+    assert model.data.load_fixtures(["E0"]).kickoff.isna().all()
+
+
+def test_log_skips_games_already_started(tmp_path, monkeypatch):
+    """A prediction logged after kick-off isn't a prediction: the database refuses it too."""
+    now = pd.Timestamp.now(tz="UTC")
+    monkeypatch.setattr(model.paper, "PAPER_DIR", tmp_path)
+    odds = {f"{b}_{s}": 2.0 for b in ("avg", "max", "b365", "ps", "bfe") for s in "hda"}
+    fx = pd.DataFrame([{"date": now.tz_localize(None).normalize(), "league": "E0", "home": h, "away": "X",
+                        "season": 2026, "kickoff": k, "p_H": 0.4, "p_D": 0.3, "p_A": 0.3,
+                        "mkt_h": 0.4, "mkt_d": 0.3, "mkt_a": 0.3, **odds}
+                       for h, k in (("Started", now - pd.Timedelta(minutes=1)), ("Later", now + pd.Timedelta(hours=1)),
+                                    ("NoTime", pd.NaT))])
+    monkeypatch.setattr(model.paper, "score_fixtures", lambda *a: fx)
+    monkeypatch.setattr(model.paper.backtest, "find_bets", lambda *a: pd.DataFrame())
+
+    tz = os.environ.get("TZ")
+    os.environ["TZ"] = "Pacific/Kiritimati"   # UTC+14: logged_at is UTC whatever the machine's clock says
+    time.tzset()
+    try:
+        model.paper.log("1x2")
+    finally:
+        os.environ.pop("TZ") if tz is None else os.environ.__setitem__("TZ", tz)
+        time.tzset()
+    got = model.paper.read_ledger("1x2")
+    assert sorted(got.home) == ["Later", "NoTime"]
+    assert "kickoff" not in got.columns
+    assert (got.logged_at - now.tz_localize(None)).abs().max() < pd.Timedelta(minutes=1)

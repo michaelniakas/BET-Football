@@ -96,9 +96,12 @@ a changed constant is a new version, old predictions stay.
 ## Shape (migration 0007, additive, reversible)
 
 One `predictions_before_kickoff` trigger, BEFORE INSERT on `predictions`: rejects a row when the fixture's `kickoff`
-is known and `predicted_at >= kickoff`. A trigger because a CHECK can't read another table and a composite FK on
+is known and `predicted_at >= kickoff` — the fixture's, or that of the same teams in the same competition a day either
+side (`kicked_off()`, ingest's `NEAR`: ESPN moves a rescheduled game with its kick-off while the ledger keeps the old
+date). `api.ledgers` calls the same function to skip the row. A trigger because a CHECK can't read another table and a composite FK on
 kick-off would cascade ESPN's kick-off changes into old predictions. INSERT only: a later kick-off never invalidates a
-prediction. Rollback: drop trigger and function, no data lost. Nothing else: bets, prices taken and closes derive
+prediction. Rollback: `migrate down` (drops trigger and functions, no data lost), then the code (its save calls
+`kicked_off()`); pre-0007 code on a 0007 database fails a whole save on a late row. Nothing else: bets, prices taken and closes derive
 from `predictions` + `odds_snapshots` (a stored copy would drift); the outcome comes from the score.
 
 ## Layers
@@ -127,7 +130,7 @@ Steps, checks, tables and worker slot are the same either way. Only these differ
 |---|---|---|
 | 0 | Decision 1 answered (B); plan approved | Recorded at the top. Gate |
 | 0a | Rescheduled club games (found 2026-11-13, **before 1 Dec**: settle gives up 30 days after the first one). See below | Failing tests first: settle, import and log each with a game moved by a day; production: the 3 ledger rows settle, `ingest check` near-duplicates 0 |
-| 1 | Migration 0007 + rollback | Up/down/up; at/after kick-off rejected, before and NULL kick-off accepted; 0 existing `predicted_at >= kickoff` rows on dev and production; golden + pg ledger tests green |
+| 1 | Migration 0007 + rollback; the paper job logs no started game | Up/down/up; at/after kick-off rejected, before and NULL kick-off accepted; `log` skips a game whose `fixtures.csv` kick-off has passed and writes `logged_at` in UTC; a save projects the rest of a ledger with a late row and `diff` reports it; golden + pg ledger tests green. Existing late rows: see below |
 | 2 | Domain: Elo, 1X2 mapping, Poisson | Hand-worked Elo update (1500 v 1500, home 2-0 friendly); Poisson recovers synthetic strengths within 0.05; probabilities sum to 1; dropping games after d changes no prediction before d |
 | 3 | `store` + `backtest` CLI on dev | Runtime and peak memory printed (> 300 MB: scipy.sparse, pin scipy); walk-forward table; leak test on real data. User (and Michalis under B) reviews. Gate |
 | 4 | `predict` job + 06:45 worker slot | 72 h horizon; thin-history skipped and counted; second run adds 0; trigger holds; worker due/next slot, never 07:00. Live on dev: this window predicted |
@@ -157,11 +160,20 @@ so `v_ledger_*` and `sync check` are unchanged. Built: `settle`/`log` match with
 Known gap: ESPN storing the new date before the ledger logs the old one makes a near-duplicate; 5a alerts, `dedupe`
 fixes it.
 
+### 1: rows already logged after kick-off (found 2026-11-13)
+
+The ledgers joined to dev's ESPN kick-offs: 21 rows (1X2 16, OU2.5 5), all from the first run, 2026-10-30 23:32
+(Konyaspor v Galatasaray 17:00 … Casa Pia v Sp Lisbon 20:15 UTC; late whether that time was UTC or +0200). The
+2026-11-06 14:42 run was before every kick-off. They are in the forward record today. The trigger checks inserts only,
+so they don't block 0007 and stay where they are; a rebuild of the normalized tables would now leave them out.
+Open: keep them in the record, or exclude them (needs Michalis: it changes the frozen strategies' numbers).
+
 ## Tradeoffs
 
-- **Breaks / who notices**: the trigger also guards the paper job's projection — one ledger row logged after ESPN's
-  kick-off fails the whole save (worker `ERROR`, stale "last update", nobody mailed). Step 1 proves none exists today;
-  a club kick-off ESPN moves before a 07:00 log could create one. A failed `predict` loses predictions for games
+- **Breaks / who notices**: a ledger row logged at or after its fixture's known kick-off stays in `ledger_*` but is
+  left out of the normalized tables (the projection skips it rather than fail the save on the trigger), so it drops
+  out of `v_ledger_*`; `python -m api.sync check` exits 1 (5a alerts). `log` now skips started games, so only a
+  kick-off ESPN moves earlier between `fixtures.csv` and the log can make one. A failed `predict` loses predictions for games
   before the next run (`ERROR` only).
 - **Cost**: no API credits; one daily run of a minute or two of CPU (not measured); a few hundred rows a month.
   Maintenance: the tournament → K map; frozen constants, changed only with a new version.
@@ -178,6 +190,6 @@ fixes it.
 - Elo constants and the Poisson-vs-Elo literature claim are from memory. `PoissonRegressor` runtime/memory on ~20k
   rows × ~500 one-hot columns and sparse input not checked (step 3 measures). Whether the Odds API's `last_update`
   moves only on a price change (else the gap overstates staleness). Which international sport keys it lists from
-  March 2027. The trigger precondition on production `bet`.
+  March 2027. The late-row count on production `bet` (dev's is from the ledger CSVs).
 - Still open: NULL `decided` is settled as 90 minutes (a UNL play-off second leg ESPN missed would be mis-settled).
   Under B, Michalis reviews `model/intl.py` and the step 3 result.

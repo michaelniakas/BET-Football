@@ -124,6 +124,11 @@ def load_fixtures(leagues: list[str]) -> pd.DataFrame:
     """Upcoming matches with pre-match odds (football-data refreshes this weekly)."""
     r = requests.get(FIXTURES_URL, timeout=30)
     r.raise_for_status()
-    fx = normalise(_read_csv(r.content))
+    raw = _read_csv(r.content)
+    fx = normalise(raw)
     fx["season"] = current_season_start()
+    # UK local time; NaT when football-data gives none (or the hour doesn't exist / repeats at a clock change).
+    fx["kickoff"] = (pd.to_datetime(raw["Date"] + " " + raw.get("Time", pd.Series(index=raw.index)).astype("str"),
+                                    dayfirst=True, errors="coerce", format="mixed")
+                     .dt.tz_localize("Europe/London", ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC"))
     return fx[fx.league.isin(leagues)].reset_index(drop=True)
