@@ -1,8 +1,19 @@
 # Phase 3: international model + forward paper trading
 
-**Draft 2026-11-12, not approved.** Phase 3 of `docs/platform-plan.md` (check: walk-forward log loss vs an Elo
-baseline; forward CLV accumulating). Branch `phase3` from `phase2`; deploys after 0006. Blocked by open decision 1
-(§ Who owns the model code); every step below holds under either answer.
+**Draft 2026-11-12; decisions recorded, start of step 1 not yet approved.** Phase 3 of `docs/platform-plan.md`
+(check: walk-forward log loss vs an Elo baseline; forward CLV accumulating). Branch `phase3` from `phase2`; deploys
+after 0006.
+
+**Decided 2026-11-12** (user):
+- Open decision 1 = **B**: Michalis co-owns the models ("I just don't want to ruin his job but continue it"; the
+  rebuild is the main app). Domain code in `model/intl.py`; store, jobs, CLI in `models/`.
+- Stand-in price: the average of the books the Odds API lists (no Stoiximan/Betano there).
+- Bet rule: `model.paper`'s 5% edge, so club and international results compare; the report sweeps other
+  thresholds. CLV counted where the last price is ≤ 3 h before kick-off: the odds slots (06:30, 11:00, 15:00,
+  18:30 UTC) leave ≤ 2 h before any kick-off from 08:30 UTC on, so 3 h keeps every game the schedule covers.
+- The model that loses the walk-forward keeps predicting forward, unofficial (its bets not read): out-of-sample rows
+  for the phase 5 leaderboard and the phase 7 ensemble, at a few hundred rows a month. Still no tuning after the
+  test period is seen.
 
 **In**: a baseline Elo and one real model (time-decayed Poisson) on national-team results since 1872; a walk-forward
 comparison of the two; daily forward 1X2 predictions for internationals; a forward report (log loss vs market, bets
@@ -59,8 +70,8 @@ a changed constant is a new version, old predictions stay.
 - Label: the stored final score (extra time included; martj42 has no 90-minute score; same noise for both).
 - Output: log loss, Brier, n per model; paired difference (Poisson − Elo) mean ± SE overall, per year, friendly vs
   competitive; draw calibration. No market column (no international odds history).
-- **Pass**: Poisson's log loss below Elo's by > 2 SE → official international model. Else Elo is, and Poisson is
-  deleted, not tuned until it passes.
+- **Pass**: Poisson's log loss below Elo's by > 2 SE → official international model. Else Elo is. The loser keeps
+  predicting forward, unofficial; neither is tuned after the test period is seen.
 
 ## Forward paper trading
 
@@ -114,7 +125,7 @@ Steps, checks, tables and worker slot are the same either way. Only these differ
 
 | # | Step | Check |
 |---|---|---|
-| 0 | Decision 1 answered; plan approved | Recorded at the top. Gate |
+| 0 | Decision 1 answered (B); plan approved | Recorded at the top. Gate |
 | 1 | Migration 0007 + rollback | Up/down/up; at/after kick-off rejected, before and NULL kick-off accepted; 0 existing `predicted_at >= kickoff` rows on dev and production; golden + pg ledger tests green |
 | 2 | Domain: Elo, 1X2 mapping, Poisson | Hand-worked Elo update (1500 v 1500, home 2-0 friendly); Poisson recovers synthetic strengths within 0.05; probabilities sum to 1; dropping games after d changes no prediction before d |
 | 3 | `store` + `backtest` CLI on dev | Runtime and peak memory printed (> 300 MB: scipy.sparse, pin scipy); walk-forward table; leak test on real data. User (and Michalis under B) reviews. Gate |
@@ -144,6 +155,5 @@ Steps, checks, tables and worker slot are the same either way. Only these differ
   rows × ~500 one-hot columns and sparse input not checked (step 3 measures). Whether the Odds API's `last_update`
   moves only on a price change (else the gap overstates staleness). Which international sport keys it lists from
   March 2027. The trigger precondition on production `bet`.
-- For the user: decision 1 (A or B); betting at the average of the listed books as the stand-in price (no
-  Stoiximan/Betano); 5% edge and 3 h gap cutoff; if Poisson loses, delete it or keep it predicting for the phase 5
-  leaderboard; NULL `decided` settled as 90 minutes (a missed UNL play-off second leg would be mis-settled).
+- Still open: NULL `decided` is settled as 90 minutes (a UNL play-off second leg ESPN missed would be mis-settled).
+  Under B, Michalis reviews `model/intl.py` and the step 3 result.
