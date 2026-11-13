@@ -79,6 +79,15 @@ def test_serves_frontend_build(tmp_path, ledger_dir):
     assert web.get("/api/v1/catalog").status_code == 200
 
 
+def test_no_page_is_indexed(tmp_path, ledger_dir):
+    """Private site (D11): every response, page, asset, API and error alike, tells crawlers not to index it."""
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<!doctype html><title>x</title>")
+    web = TestClient(create_app(CsvLedgers(ledger_dir), LiveOddsCache(""), web=tmp_path))
+    for path in ("/", "/?page=results&lang=en", "/assets/missing.js", "/api/v1/catalog", "/api/v1/nope", "/health"):
+        assert web.get(path).headers["x-robots-tag"] == "noindex, nofollow", path
+
+
 def test_internal_error_does_not_leak(make_client):
     class Broken:
         def read(self, strategy):

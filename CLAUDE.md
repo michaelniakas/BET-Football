@@ -6,6 +6,10 @@ with what was rejected) and add a line below.
 
 ## Decisions that constrain code (newest first)
 
+- **2026-11-13: the site is never indexed.** Every response carries `X-Robots-Tag: noindex, nofollow` (middleware in
+  `api/main.py`; `tests/test_api.py::test_no_page_is_indexed`). No `robots.txt` Disallow: it would hide the header from
+  crawlers. Google had no pages on 2026-11-13. This is not privacy: the site has no login; a password is still open.
+
 - **2026-11-13: the forward record counts only predictions stored before kick-off.** The paper job skips games whose
   `fixtures.csv` kick-off has passed; migration 0007 (`kicked_off()` + trigger) refuses a prediction at or after its
   game's kick-off; migration 0008 leaves the ones stored earlier (21 from the 2026-10-30 23:32 run) out of

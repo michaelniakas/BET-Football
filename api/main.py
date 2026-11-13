@@ -118,6 +118,14 @@ def create_app(ledgers: uc.Ledgers, odds: uc.LiveOdds,
                web: Path | None = None) -> FastAPI:
     app = FastAPI(title="BET-Football API", openapi_url=None, docs_url=None, redoc_url=None)
 
+    @app.middleware("http")
+    async def noindex(request, call_next):
+        # Private site: no search engine indexes a page, asset or API response. A robots.txt Disallow would
+        # stop crawlers reading this header, so a linked URL could still be listed without its content.
+        response = await call_next(request)
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
     # ----------------------------------------------------------------------- errors
     @app.exception_handler(RequestValidationError)
     def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
