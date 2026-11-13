@@ -1,6 +1,6 @@
 # Phase 3: international model + forward paper trading
 
-**Draft 2026-11-12; decisions recorded, start of step 1 not yet approved.** Phase 3 of `docs/platform-plan.md`
+**Draft 2026-11-12; decisions recorded. Steps 0a and 1 live (2026-11-13).** Phase 3 of `docs/platform-plan.md`
 (check: walk-forward log loss vs an Elo baseline; forward CLV accumulating). Branch `phase3` from `phase2`; deploys
 after 0006.
 
@@ -130,7 +130,7 @@ Steps, checks, tables and worker slot are the same either way. Only these differ
 |---|---|---|
 | 0 | Decision 1 answered (B); plan approved | Recorded at the top. Gate |
 | 0a | Rescheduled club games (found 2026-11-13, **before 1 Dec**: settle gives up 30 days after the first one). See below | Failing tests first: settle, import and log each with a game moved by a day; production: the 3 ledger rows settle, `ingest check` near-duplicates 0 |
-| 1 | Migration 0007 + rollback; the paper job logs no started game | Up/down/up; at/after kick-off rejected, before and NULL kick-off accepted; `log` skips a game whose `fixtures.csv` kick-off has passed and writes `logged_at` in UTC; a save projects the rest of a ledger with a late row and `diff` reports it; golden + pg ledger tests green. Existing late rows: see below |
+| 1 | Migration 0007 + rollback; the paper job logs no started game; 0008 takes late rows out of the record | Up/down/up; at/after kick-off rejected, before and NULL kick-off accepted; `log` skips a game whose `fixtures.csv` kick-off has passed and writes `logged_at` in UTC; a save projects the rest of a ledger with a late row and `late` counts it; `sync export` keeps it; golden + pg ledger tests green. Existing late rows: see below |
 | 2 | Domain: Elo, 1X2 mapping, Poisson | Hand-worked Elo update (1500 v 1500, home 2-0 friendly); Poisson recovers synthetic strengths within 0.05; probabilities sum to 1; dropping games after d changes no prediction before d |
 | 3 | `store` + `backtest` CLI on dev | Runtime and peak memory printed (> 300 MB: scipy.sparse, pin scipy); walk-forward table; leak test on real data. User (and Michalis under B) reviews. Gate |
 | 4 | `predict` job + 06:45 worker slot | 72 h horizon; thin-history skipped and counted; second run adds 0; trigger holds; worker due/next slot, never 07:00. Live on dev: this window predicted |
@@ -164,15 +164,28 @@ fixes it.
 
 The ledgers joined to dev's ESPN kick-offs: 21 rows (1X2 16, OU2.5 5), all from the first run, 2026-10-30 23:32
 (Konyaspor v Galatasaray 17:00 … Casa Pia v Sp Lisbon 20:15 UTC; late whether that time was UTC or +0200). The
-2026-11-06 14:42 run was before every kick-off. They are in the forward record today. The trigger checks inserts only,
-so they don't block 0007 and stay where they are; a rebuild of the normalized tables would now leave them out.
-Open: keep them in the record, or exclude them (needs Michalis: it changes the frozen strategies' numbers).
+2026-11-06 14:42 run was before every kick-off. Production has the same 21 (checked 2026-11-13 after 0007 went live).
+
+**Decided 2026-11-13 (Nikos; Michalis informed): the forward record counts only predictions stored before kick-off.**
+Migration 0008 (`0008_on_time_record`) adds `NOT kicked_off(f.id, pr.predicted_at)` to `v_ledger_1x2` and
+`v_ledger_ou25`. Nothing is deleted: the 21 stay in `predictions` and `ledger_*`; `migrate down` brings them back.
+The site and the API read the views, so the published 1X2 settled count goes from 286
+to 270 and OU 2.5 from 96 to 91. `python -m api.sync check` prints them as "logged after kick-off" apart from the
+differences (exit 0); `PostgresLedgers.late` counts them. One rule in `api/ledgers.py` (`LATE`) for the projection,
+`diff` and `late`; one in SQL (`kicked_off()`) for the trigger and the views. `sync export`, the worker's backup
+and the paper job's working copy read `ledger_*` (`PostgresLedgers.read(with_late=True)`), so the CSVs keep the 21
+(review finding: the backup was the only consistent copy and would have lost them). Phase 1's step 6 (1b: drop
+`ledger_*`, export from the views) must keep them exportable, e.g. with an unfiltered view. The views filter at
+query time: a kick-off ESPN later moves earlier than a stored prediction takes it out too, and `late` changes;
+5a alerts on a change in `late`, not only on a new row.
+Rejected: deleting the rows (irreversible; the ledgers are the audit trail); keeping them (a record with predictions
+made during the game can't be trusted, and `sync check` would fail forever on any new late row).
 
 ## Tradeoffs
 
 - **Breaks / who notices**: a ledger row logged at or after its fixture's known kick-off stays in `ledger_*` but is
   left out of the normalized tables (the projection skips it rather than fail the save on the trigger), so it drops
-  out of `v_ledger_*`; `python -m api.sync check` exits 1 (5a alerts). `log` now skips started games, so only a
+  out of `v_ledger_*`; `python -m api.sync check` counts it as late, exit 0 (5a alerts when the count changes; until then nothing does). `log` now skips started games, so only a
   kick-off ESPN moves earlier between `fixtures.csv` and the log can make one. A failed `predict` loses predictions for games
   before the next run (`ERROR` only).
 - **Cost**: no API credits; one daily run of a minute or two of CPU (not measured); a few hundred rows a month.

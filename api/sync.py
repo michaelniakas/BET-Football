@@ -4,6 +4,7 @@
     python -m api.sync export DIR    # Postgres -> CSV: the job's working copy, the backup, the rollback
     python -m api.sync project       # ledger tables -> normalized tables (the phase 1 backfill; idempotent), then check
     python -m api.sync check         # rows differing between each ledger table and its view; exit 1 if any
+                                     # (rows logged after kick-off are counted apart, not as differences)
 
 Connection string from DATABASE_URL.
 """
@@ -25,12 +26,15 @@ def to_postgres(pg: PostgresLedgers, directory: Path) -> dict[str, tuple[int, in
 
 
 def to_csv(pg: PostgresLedgers, directory: Path) -> dict[str, int]:
-    """Rows written per strategy. An empty ledger leaves no file, as before the job's first run."""
+    """Rows written per strategy. An empty ledger leaves no file, as before the job's first run.
+
+    The whole ledger, rows logged after kick-off included: this is the backup, and the job's working copy.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     out = {}
     for s in STRATEGIES:
         path = directory / f"ledger_{s}.csv"
-        df = pg.read(s)
+        df = pg.read(s, with_late=True)
         if df.empty:
             path.unlink(missing_ok=True)
         else:
@@ -56,6 +60,7 @@ def main() -> None:
                 pg.project(s)
             n = pg.diff(s)
             print(f"[{s}] {n} rows differ between ledger_{s} and v_ledger_{s}")
+            print(f"[{s}] {pg.late(s)} logged after kick-off, left out of v_ledger_{s}")
             differ += n
         if differ:
             raise SystemExit(1)
