@@ -216,8 +216,10 @@ def import_odds(conn: psycopg.Connection, rows: list[dict]) -> dict[str, int]:
 
 def import_footballdata(conn: psycopg.Connection, games: list[footballdata.Game]) -> dict[str, int]:
     """One football-data file. football-data is the club identity source: every name is a team. A game finds its
-    fixture by the ledger projection's key (competition, UK date, teams), else is inserted; a kick-off and a score
-    fill what is missing, a score only when it agrees with what the ledgers settled. Prices are untimed, first kept."""
+    fixture by competition and teams on its UK date, else a day either side (fixtures.csv keeps a moved game's old
+    date, so the ledgers' fixture keeps it too), else is inserted. Any other fixture a day off moves to football-data's
+    date. A kick-off and a score fill what is missing, a score only when it agrees with what the ledgers settled.
+    Prices are untimed, first kept."""
     with conn.transaction():
         store.lock(conn)
         codes = sorted({g.code for g in games})
@@ -237,28 +239,43 @@ def import_footballdata(conn: psycopg.Connection, games: list[footballdata.Game]
             for n, g in enumerate(games):
                 for p in g.prices:
                     cp.write_row((n, p.market, p.line, p.bookmaker, p.kind, list(p.prices)))
-        key = "(f.competition_id, f.date, f.home_id, f.away_id) = (c.id, s.date, s.home_id, s.away_id)"
-        inserted = conn.execute("""
+        near = f"f.competition_id = c.id AND {NEAR}"
+        inserted = conn.execute(f"""
             INSERT INTO fixtures (competition_id, season, date, home_id, away_id, kickoff, hg, ag)
             SELECT c.id, s.season, s.date, s.home_id, s.away_id, s.kickoff, s.hg, s.ag FROM stage s JOIN competitions c ON c.code = s.code
+            WHERE NOT EXISTS (SELECT FROM fixtures f WHERE {near})
             ON CONFLICT DO NOTHING""").rowcount
-        conn.execute(f"""UPDATE fixtures f SET kickoff = s.kickoff FROM stage s JOIN competitions c ON c.code = s.code
-                         WHERE {key} AND f.kickoff IS NULL AND s.kickoff IS NOT NULL""")
+        conn.execute(f"""CREATE TEMP TABLE hit ON COMMIT DROP AS
+            SELECT s.n, f.id FROM stage s JOIN competitions c ON c.code = s.code
+            CROSS JOIN LATERAL (SELECT f.id FROM fixtures f WHERE {near} ORDER BY abs(f.date - s.date) LIMIT 1) f""")
+        key = "f.id = h.id"
+        # football-data lists the day a game was played: a fixture a day off takes it with its kick-off, as in
+        # import_espn, unless it is the ledgers' (their key keeps fixtures.csv's date) or the new key is taken.
+        conn.execute("""
+            UPDATE fixtures f SET date = s.date, kickoff = s.kickoff FROM stage s JOIN hit h USING (n)
+            WHERE f.id = h.id AND f.date <> s.date AND f.result IS NULL AND f.ou25 IS NULL
+              AND NOT EXISTS (SELECT FROM predictions p WHERE p.fixture_id = f.id)
+              AND NOT EXISTS (SELECT FROM fixtures o WHERE (o.competition_id, o.date, o.home_id, o.away_id)
+                                                           = (f.competition_id, s.date, f.home_id, f.away_id))""")
+        # A kick-off just past midnight UK can be two days from a fixture a day off (fixtures_kickoff_on_date).
+        conn.execute(f"""UPDATE fixtures f SET kickoff = s.kickoff FROM stage s JOIN hit h USING (n)
+                         WHERE {key} AND f.kickoff IS NULL AND s.kickoff IS NOT NULL
+                           AND abs((s.kickoff AT TIME ZONE 'UTC')::date - f.date) <= 1""")
         filled = conn.execute(f"""
-            UPDATE fixtures f SET hg = s.hg, ag = s.ag FROM stage s JOIN competitions c ON c.code = s.code
+            UPDATE fixtures f SET hg = s.hg, ag = s.ag FROM stage s JOIN hit h USING (n)
             WHERE {key} AND f.hg IS NULL AND (f.result IS NULL OR f.result = outcome_1x2(s.hg, s.ag))
               -- A predicted fixture's score is the ledger's to set: one filled here first could not take a
               -- correction football-data makes before settle (the score is final once set).
               AND NOT EXISTS (SELECT FROM predictions p WHERE p.fixture_id = f.id)
               AND (f.ou25 IS NULL OR f.ou25 = outcome_ou25(s.hg, s.ag))""").rowcount
         disagree = conn.execute(f"""
-            SELECT count(*) FROM stage s JOIN competitions c ON c.code = s.code JOIN fixtures f ON {key}
+            SELECT count(*) FROM stage s JOIN hit h USING (n) JOIN fixtures f ON {key}
             WHERE (f.hg, f.ag) <> (s.hg, s.ag) OR f.result <> outcome_1x2(s.hg, s.ag)
                OR f.ou25 <> outcome_ou25(s.hg, s.ag)""").fetchone()[0]
         prices = conn.execute(f"""
             INSERT INTO odds_snapshots (fixture_id, market, line, source, bookmaker, kind, captured_at, prices)
             SELECT f.id, p.market, p.line, 'football-data', p.bookmaker, p.kind, NULL, p.prices
-            FROM stage_prices p JOIN stage s USING (n) JOIN competitions c ON c.code = s.code JOIN fixtures f ON {key}
+            FROM stage_prices p JOIN hit h USING (n) JOIN fixtures f ON {key}
             ON CONFLICT DO NOTHING""").rowcount
         return {"games": len(games), "inserted": inserted, "filled": filled, "score_disagrees": disagree,
                 "prices": prices}
@@ -271,6 +288,46 @@ def footballdata_seasons(conn: psycopg.Connection) -> set[tuple[str, int]]:
         SELECT DISTINCT c.code, f.season FROM odds_snapshots o JOIN fixtures f ON f.id = o.fixture_id
         JOIN competitions c ON c.id = f.competition_id
         WHERE o.source = 'football-data' AND o.captured_at IS NULL""").fetchall())
+
+
+def dedupe(conn: psycopg.Connection) -> dict[str, int]:
+    """Club fixtures with the same teams in the same competition a day apart are one game moved by a day, stored twice
+    (the ledgers' fixture on fixtures.csv's old date, football-data's or ESPN's on the new one). When exactly one is
+    predicted, the other's prices, market probabilities and refs move to it (what it already has stays), its kick-off
+    fills a missing one, and it goes; its score is the ledger's to set. Other pairs, and a duplicate two predicted
+    fixtures claim, are counted and left. Re-runs: no-op."""
+    pairs = """SELECT a.id AS a, b.id AS b, EXISTS (SELECT FROM predictions p WHERE p.fixture_id = a.id) AS a_pred,
+                      EXISTS (SELECT FROM predictions p WHERE p.fixture_id = b.id) AS b_pred
+               FROM fixtures a JOIN competitions c ON c.id = a.competition_id AND c.kind = 'club_league'
+               JOIN fixtures b ON b.id > a.id AND (b.competition_id, b.home_id, b.away_id) = (a.competition_id, a.home_id, a.away_id)
+                AND b.date BETWEEN a.date - 1 AND a.date + 1"""
+    with conn.transaction():
+        store.lock(conn)
+        conn.execute(f"""CREATE TEMP TABLE pair ON COMMIT DROP AS
+            SELECT CASE WHEN a_pred THEN a ELSE b END AS keep, CASE WHEN a_pred THEN b ELSE a END AS dup
+            FROM ({pairs}) p WHERE a_pred <> b_pred;
+            -- A duplicate between two predicted fixtures: whose game it is, a human decides.
+            DELETE FROM pair WHERE dup IN (SELECT dup FROM pair GROUP BY dup HAVING count(*) > 1)""")
+        conn.execute("""
+            -- Append-only rows: copied, then the duplicate's deleted.
+            INSERT INTO odds_snapshots (fixture_id, market, line, source, bookmaker, kind, captured_at, prices)
+            SELECT p.keep, o.market, o.line, o.source, o.bookmaker, o.kind, o.captured_at, o.prices
+            FROM odds_snapshots o JOIN pair p ON p.dup = o.fixture_id ON CONFLICT DO NOTHING;
+            DELETE FROM odds_snapshots o USING pair p WHERE o.fixture_id = p.dup;
+            INSERT INTO market_probs (fixture_id, market, line, kind, method, captured_at, p)
+            SELECT p.keep, o.market, o.line, o.kind, o.method, o.captured_at, o.p
+            FROM market_probs o JOIN pair p ON p.dup = o.fixture_id ON CONFLICT DO NOTHING;
+            DELETE FROM market_probs o USING pair p WHERE o.fixture_id = p.dup;
+            UPDATE fixture_refs r SET fixture_id = m.keep
+            FROM (SELECT DISTINCT ON (p.keep, r.source) r.source, r.ref, p.keep FROM fixture_refs r
+                  JOIN pair p ON p.dup = r.fixture_id ORDER BY p.keep, r.source, r.ref) m
+            WHERE (r.source, r.ref) = (m.source, m.ref)
+              AND NOT EXISTS (SELECT FROM fixture_refs k WHERE (k.source, k.fixture_id) = (m.source, m.keep));
+            UPDATE fixtures k SET kickoff = d.kickoff FROM pair p JOIN fixtures d ON d.id = p.dup
+            WHERE k.id = p.keep AND k.kickoff IS NULL AND abs((d.kickoff AT TIME ZONE 'UTC')::date - k.date) <= 1""")
+        merged = conn.execute("DELETE FROM fixtures f USING pair p WHERE f.id = p.dup").rowcount   # refs left: cascade
+        left = conn.execute(f"SELECT count(*) FROM ({pairs}) p").fetchone()[0]
+        return {"merged": merged, "left": left}
 
 
 class MergeError(Exception):

@@ -33,6 +33,9 @@ SCORE = ["hg", "ag"]       # final score (football-data FTHG, FTAG)
 # Settle stops looking for a fixture's result and score this long after kick-off: a postponed match
 # reappears under another date, and a result football-data changed after we settled never gets a score.
 GIVE_UP = pd.Timedelta(days=30)
+# The same teams in the same league this close are one game: fixtures.csv keeps a moved game's old date, the season
+# files list the day it was played. Further apart, it is another game (ingest's NEAR rule).
+NEAR = pd.Timedelta(days=1)
 
 
 def ledger_path(name: str):
@@ -60,8 +63,7 @@ def log(name: str) -> None:
 
     ledger = read_ledger(name)
     if not ledger.empty:
-        seen = ledger.set_index(KEY).index
-        snap = snap[~snap.set_index(KEY).index.isin(seen)]
+        snap = snap[_nearest(snap[KEY], ledger[KEY].assign(seen=True)).seen.isna()]
     PAPER_DIR.mkdir(exist_ok=True)
     pd.concat([ledger, snap], ignore_index=True).to_csv(ledger_path(name), index=False)
 
@@ -71,6 +73,15 @@ def log(name: str) -> None:
     if not picks.empty:
         print(picks[["date", "league", "home", "away", "pick", "odds", "p_model", "edge"]]
               .sort_values("date").to_string(index=False))
+
+
+def _nearest(rows: pd.DataFrame, other: pd.DataFrame) -> pd.DataFrame:
+    """For each of `rows` (KEY columns), `other`'s row of the same game: the same date, else within NEAR. Indexed like
+    `rows`, all NaN where there is none; `other`'s columns except its date."""
+    m = rows[KEY].rename_axis("row").reset_index().merge(other, on=["league", "home", "away"], suffixes=("", "_other"))
+    m = m.assign(off=(m.date_other - m.date).abs())
+    m = m[m.off <= NEAR].sort_values("off", kind="stable").drop_duplicates("row")
+    return m.set_index("row").drop(columns=["date_other", "off"]).reindex(rows.index)
 
 
 def _no_close(spec: dict) -> dict:
@@ -105,8 +116,7 @@ def settle(name: str) -> None:
     played = add_market(FeatureBuilder().build(data.load(leagues, seasons)))
     played = played[KEY + [spec["target"]] + close_cols + SCORE]
 
-    merged = ledger.loc[todo, KEY].merge(played, on=KEY, how="left")
-    merged.index = ledger.index[todo]
+    merged = _nearest(ledger.loc[todo], played)
     for c in [spec["target"]] + close_cols:
         ledger.loc[open_rows, c] = merged[c]
     # Only a score that agrees with the stored result: the database refuses one that contradicts it.

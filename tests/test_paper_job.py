@@ -104,3 +104,48 @@ def test_settle_gives_up_on_fixtures_football_data_never_scores(tmp_path, monkey
 
     model.paper.settle("1x2")
     assert "nothing to settle" in capsys.readouterr().out
+
+
+def _no_feature_build(monkeypatch, played: pd.DataFrame) -> None:
+    monkeypatch.setattr(model.paper.data, "download", lambda leagues, seasons: None)
+    monkeypatch.setattr(model.paper.data, "load", lambda leagues, seasons: played)
+    monkeypatch.setattr(model.paper, "FeatureBuilder", lambda: type("B", (), {"build": staticmethod(lambda df: df)}))
+    monkeypatch.setattr(model.paper, "add_market", lambda df: df)
+
+
+def test_settle_finds_a_game_moved_by_a_day(tmp_path, monkeypatch):
+    """fixtures.csv keeps a moved game's old date; the season file lists the day it was played."""
+    day = lambda n: pd.Timestamp.today().normalize() + pd.Timedelta(days=n)    # noqa: E731
+    ledger = pd.DataFrame([{"date": d, "league": "SP2", "home": h, "away": "X", "season": 2026, "logged_at": day(-6),
+                            "result": r} for h, d, r in (("Moved", day(-3), None), ("Far", day(-4), None),
+                                                         ("Exact", day(-2), None), ("Done", day(-9), "A"))])
+    monkeypatch.setattr(model.paper, "PAPER_DIR", tmp_path)
+    ledger.to_csv(model.paper.ledger_path("1x2"), index=False)
+    row = lambda h, d, hg, ag, r: {"date": d, "league": "SP2", "home": h, "away": "X", "result": r,   # noqa: E731
+                                   "hg": hg, "ag": ag, "close_h": 0.5, "close_d": 0.3, "close_a": 0.2}
+    _no_feature_build(monkeypatch, pd.DataFrame([
+        row("Moved", day(-2), 1.0, 0.0, "H"), row("Far", day(-2), 0.0, 1.0, "A"),
+        row("Exact", day(-3), 0.0, 0.0, "D"), row("Exact", day(-2), 2.0, 2.0, "D")]))  # the exact one wins
+
+    model.paper.settle("1x2")
+    got = model.paper.read_ledger("1x2").set_index("home")
+    assert [None if pd.isna(v) else v for v in got.loc["Moved", ["date", "result", "hg"]]] == [day(-3), "H", 1]
+    assert pd.isna(got.loc["Far", "result"])                    # two days off: another game
+    assert got.loc["Exact", "hg"] == 2
+
+
+def test_log_skips_a_logged_game_fixtures_csv_moved_by_a_day(tmp_path, monkeypatch):
+    day = lambda n: pd.Timestamp.today().normalize() + pd.Timedelta(days=n)    # noqa: E731
+    monkeypatch.setattr(model.paper, "PAPER_DIR", tmp_path)
+    pd.DataFrame([{"date": day(1), "league": "SP2", "home": h, "away": "X", "season": 2026, "logged_at": day(-1)}
+                  for h in ("Moved", "Far")]).to_csv(model.paper.ledger_path("1x2"), index=False)
+    odds = {f"{b}_{s}": 2.0 for b in ("avg", "max", "b365", "ps", "bfe") for s in "hda"}
+    fx = pd.DataFrame([{"date": d, "league": "SP2", "home": h, "away": "X", "season": 2026,
+                        "p_H": 0.4, "p_D": 0.3, "p_A": 0.3, "mkt_h": 0.4, "mkt_d": 0.3, "mkt_a": 0.3, **odds}
+                       for h, d in (("Moved", day(2)), ("Far", day(3)))])
+    monkeypatch.setattr(model.paper, "score_fixtures", lambda *a: fx)
+    monkeypatch.setattr(model.paper.backtest, "find_bets", lambda *a: pd.DataFrame())
+
+    model.paper.log("1x2")
+    got = model.paper.read_ledger("1x2")
+    assert sorted(zip(got.home, got.date)) == [("Far", day(1)), ("Far", day(3)), ("Moved", day(1))]

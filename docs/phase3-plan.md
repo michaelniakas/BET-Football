@@ -149,8 +149,13 @@ football-data import). Everything keys on the exact date:
   bet a second time.
 Fix direction (plan before code; editing `model/paper.py` is fine, the user has Michalis's OK): the same teams in the same league within a day are
 one game (ingest's `NEAR` rule) in settle, log and the football-data import; a one-off cleanup of the 3 duplicate
-fixtures (their football-data prices move to the ledger fixture). Open: which date the kept fixture shows (ledger
-key vs played date) given the `v_ledger_*` projection and `sync check` compare on date.
+fixtures (their football-data prices move to the ledger fixture). Decided (2026-11-13): the kept fixture shows the
+ledger's date, as `import_espn` already does for a predicted game (`fixtures_kickoff_on_date` allows the day's gap),
+so `v_ledger_*` and `sync check` are unchanged. Built: `settle`/`log` match within a day (`model.paper.NEAR`),
+`import_footballdata` takes the nearest fixture within a day (and moves an unpredicted one to the played date),
+`python -m ingest dedupe` folds the duplicates.
+Known gap: ESPN storing the new date before the ledger logs the old one makes a near-duplicate; 5a alerts, `dedupe`
+fixes it.
 
 ## Tradeoffs
 
