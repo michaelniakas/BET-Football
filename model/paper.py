@@ -58,8 +58,10 @@ def log(name: str) -> None:
         return
     odds = [f"{b}_{s}" for b in ("avg", "max", "b365", "ps", "bfe") for s in spec["suffixes"]]
     cols = KEY + ["season"] + [f"p_{o}" for o in spec["outcomes"]] + [f"mkt_{s}" for s in spec["suffixes"]] + odds
-    snap = fx[cols].assign(logged_at=pd.Timestamp.now().floor("s"))
-    snap = snap[snap.date >= pd.Timestamp.today().normalize()]
+    now = pd.Timestamp.now(tz="UTC")
+    started = fx.kickoff <= now                     # NaT (no kick-off time) is False: the date alone decides
+    snap = fx.loc[~started, cols].assign(logged_at=now.tz_localize(None).floor("s"))   # the database reads UTC
+    snap = snap[snap.date >= now.tz_localize(None).normalize()]
 
     ledger = read_ledger(name)
     if not ledger.empty:

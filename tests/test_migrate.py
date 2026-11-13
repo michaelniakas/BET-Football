@@ -122,6 +122,12 @@ def fixture_row(pg_url: str):
         yield conn
 
 
+PRED = ("INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, predicted_at, p)"
+        " VALUES (1, 1, '2026-11-08', 'ou', 3.5, ")      # + predicted_at and p
+KICKOFF = "UPDATE fixtures SET kickoff = '2026-11-08 15:00Z'; "
+NEAR = ("INSERT INTO fixtures (competition_id, season, date, home_id, away_id, kickoff)"  # the same game, moved
+        " VALUES (1, 2026, '2026-11-07', 1, 2, '2026-11-07 15:00Z'); ")
+
 BAD_NORMALIZED = {
     "probabilities don't sum to 1": "INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, "
         "predicted_at, p) VALUES (1, 1, '2026-11-08', 'ou', 3.5, '2026-11-06Z', '{0.6,0.5}')",
@@ -180,6 +186,10 @@ BAD_NORMALIZED = {
         "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}', 'closing')",
     "untimed price rewritten": "INSERT INTO odds_snapshots VALUES (1, '1x2', NULL, 'football-data', 'max', NULL, "
         "'{2,3.5,4}', 'closing'); UPDATE odds_snapshots SET prices = '{2,3.6,4}' WHERE kind = 'closing'",
+    # 0007
+    "predicted at kick-off": KICKOFF + PRED + "'2026-11-08 15:00Z', '{0.6,0.4}')",
+    "predicted after kick-off": KICKOFF + PRED + "'2026-11-08 15:01Z', '{0.6,0.4}')",
+    "predicted after the moved game's kick-off": NEAR + PRED + "'2026-11-07 16:00Z', '{0.6,0.4}')",
 }
 
 GOOD_NORMALIZED = {
@@ -193,6 +203,14 @@ GOOD_NORMALIZED = {
         "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}')",
     "closing price, same book": "INSERT INTO odds_snapshots VALUES "
         "(1, '1x2', NULL, 'football-data', 'avg', NULL, '{2.1,3.4,4}', 'closing')",
+    # 0007
+    "predicted before kick-off": KICKOFF + PRED + "'2026-11-08 14:59Z', '{0.6,0.4}')",
+    "predicted, kick-off unknown": PRED + "'2026-11-08 20:00Z', '{0.6,0.4}')",
+    "predicted before the moved game's kick-off": NEAR + PRED + "'2026-11-07 14:00Z', '{0.6,0.4}')",
+    "predicted after another game's kick-off": NEAR.replace("2026-11-07", "2026-11-06") + PRED
+        + "'2026-11-07 16:00Z', '{0.6,0.4}')",
+    "kick-off moved before a stored prediction": PRED + "'2026-11-07 20:00Z', '{0.6,0.4}'); "
+        "UPDATE fixtures SET kickoff = '2026-11-07 19:00Z'",
 }
 
 
@@ -203,10 +221,11 @@ def test_down_removes_untimed_and_closing_prices_only(fixture_row: psycopg.Conne
                                           (1, '1x2', NULL, 'the-odds-api', 'b365', '2026-11-08Z', '{2,3.4,4}', 'closing')
     """)
     fixture_row.commit()
+    assert migrate.down(pg_url) == "0007_before_kickoff"
     assert migrate.down(pg_url) == "0006_untimed_odds"
     with psycopg.connect(pg_url) as conn:
         assert conn.execute("SELECT bookmaker, captured_at IS NOT NULL FROM odds_snapshots").fetchall() == [("avg", True)]
-    assert migrate.up(pg_url) == ["0006_untimed_odds"]
+    assert migrate.up(pg_url) == ["0006_untimed_odds", "0007_before_kickoff"]
 
 
 def test_old_worker_insert_still_works(fixture_row: psycopg.Connection):
@@ -234,6 +253,7 @@ def test_down_removes_international_data_only(fixture_row: psycopg.Connection, p
         INSERT INTO paper_runs (job, slot) VALUES ('espn', '2026-11-12 06:00Z'), ('paper', '2026-11-10 07:00Z');
     """)
     fixture_row.commit()
+    assert migrate.down(pg_url) == "0007_before_kickoff"
     assert migrate.down(pg_url) == "0006_untimed_odds"
     assert migrate.down(pg_url) == "0005_ingestion"
     with psycopg.connect(pg_url) as conn:

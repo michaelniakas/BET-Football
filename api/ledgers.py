@@ -234,6 +234,9 @@ class PostgresLedgers:
                             " = (c.id, l.date, th.team_id, ta.team_id)").format(teams=teams)
         lit["same"] = sql.SQL("(f.competition_id, f.date, f.home_id, f.away_id) = (c.id, l.date, th.team_id, ta.team_id)")
         lit["teams"] = teams
+        # Logged at or after kick-off: the database refuses the prediction (0007), and its prices aren't pre-match.
+        # The row is left out of the normalized tables, so `diff` reports it.
+        lit["before"] = sql.SQL("NOT kicked_off(f.id, l.logged_at AT TIME ZONE 'UTC')")
         conn.execute(sql.SQL("""
             INSERT INTO competitions (code) SELECT DISTINCT league FROM {ledger} ON CONFLICT DO NOTHING;
 
@@ -255,18 +258,20 @@ class PostgresLedgers:
             WHERE NOT EXISTS (SELECT FROM predictions o JOIN models om ON om.id = o.model_id
                               WHERE om.name = {model} AND o.fixture_id = f.id AND o.market = {market}
                                 AND o.line IS NOT DISTINCT FROM {line})
+              AND {before}
             ORDER BY l.seq
             ON CONFLICT DO NOTHING;
 
             INSERT INTO odds_snapshots (fixture_id, market, line, source, bookmaker, captured_at, prices)
             SELECT f.id, {market}, {line}, 'football-data', b.book, l.logged_at AT TIME ZONE 'UTC', b.prices
             FROM {ledger} l {fx}, LATERAL (VALUES {books}) b(book, prices)
-            WHERE array_position(b.prices, NULL) IS NULL
+            WHERE array_position(b.prices, NULL) IS NULL AND {before}
             ON CONFLICT DO NOTHING;
 
             INSERT INTO market_probs (fixture_id, market, line, kind, method, captured_at, p)
             SELECT f.id, {market}, {line}, 'pre_match', {method}, l.logged_at AT TIME ZONE 'UTC', {mkt}
             FROM {ledger} l {fx}
+            WHERE {before}
             ON CONFLICT DO NOTHING;
 
             INSERT INTO market_probs (fixture_id, market, line, kind, method, captured_at, p)
