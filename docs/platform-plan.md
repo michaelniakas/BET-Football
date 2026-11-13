@@ -62,6 +62,7 @@ provider is added when used, not as a speculative interface.
 | 1 | Normalized schema beside the ledgers (expand/contract), backfill, API reads the new tables | Golden tests: API responses identical to today |
 | 2 | Ingestion: club + international fixtures/results, historical odds import, odds snapshots, team mapping | Counts vs sources; zero unmapped teams; closing line present where the source has one |
 | 3 | International model + forward paper trading | Walk-forward log loss vs Elo baseline; forward CLV accumulating |
+| 3b | UEFA club competitions (Champions, Europa, Conference League): fixtures, results, odds snapshots; one club rating across leagues; forward paper trading | Zero unmapped clubs between UEFA and domestic sources; walk-forward log loss on UEFA games vs the per-league model and vs the market; forward CLV accumulating |
 | 4 | Research job + LLM and news-adjusted models | Provenance + cost on every row; monthly cap enforced in code |
 | 5 | Model scoring + leaderboard endpoint (contract first) | Metrics recomputed independently in tests |
 | 6 | Frontend: scope filter, badges, match drawer, leaderboard | Screenshots EN/EL × light/dark × desktop/phone |
@@ -177,4 +178,7 @@ rows, 2026/27 on none (falls back to Betfair). So 2025/26 training rows use stal
 1. Michalis: new models in a new `models/` package with `model/` his, or does he own/co-own them? Needed before
    phase 3.
 2. Budget caps per month: odds data and LLM. Suggested: after the pilot's numbers.
-3. Scope beyond the 16 football-data leagues: UEFA club competitions need another source.
+3. Scope beyond the 16 football-data leagues: UEFA club competitions need another source. **Decided 2026-11-13**
+   (user): in scope as phase 3b, after phase 3 (internationals first). Paid sources allowed ("no cheap stuff");
+   which ones is decided in its plan. Why a separate model: `model/features.py` keys Elo per country, so ratings
+   of clubs from different countries are on unrelated scales; UEFA games are the only cross-league results.

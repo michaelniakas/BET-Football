@@ -24,7 +24,9 @@ COPY ingest/ ingest/
 COPY --from=web /src/web/dist web/dist
 USER app
 EXPOSE 7860
+# The worker (WORKER_DIR set) serves nothing: alive = its process is running, and a crash restarts it.
+# ponytail: a hung worker still reports healthy; a heartbeat file checked here if that ever happens.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=4)"
+  CMD [ -n "$WORKER_DIR" ] || python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=4)"
 # One process; request concurrency comes from FastAPI's threadpool (the handlers are sync).
 CMD ["uvicorn", "--factory", "api.main:from_env", "--host", "0.0.0.0", "--port", "7860"]
