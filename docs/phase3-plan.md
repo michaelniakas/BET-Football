@@ -126,12 +126,31 @@ Steps, checks, tables and worker slot are the same either way. Only these differ
 | # | Step | Check |
 |---|---|---|
 | 0 | Decision 1 answered (B); plan approved | Recorded at the top. Gate |
+| 0a | Rescheduled club games (found 2026-11-13, **before 1 Dec**: settle gives up 30 days after the first one). See below | Failing tests first: settle, import and log each with a game moved by a day; production: the 3 ledger rows settle, `ingest check` near-duplicates 0 |
 | 1 | Migration 0007 + rollback | Up/down/up; at/after kick-off rejected, before and NULL kick-off accepted; 0 existing `predicted_at >= kickoff` rows on dev and production; golden + pg ledger tests green |
 | 2 | Domain: Elo, 1X2 mapping, Poisson | Hand-worked Elo update (1500 v 1500, home 2-0 friendly); Poisson recovers synthetic strengths within 0.05; probabilities sum to 1; dropping games after d changes no prediction before d |
 | 3 | `store` + `backtest` CLI on dev | Runtime and peak memory printed (> 300 MB: scipy.sparse, pin scipy); walk-forward table; leak test on real data. User (and Michalis under B) reviews. Gate |
 | 4 | `predict` job + 06:45 worker slot | 72 h horizon; thin-history skipped and counted; second run adds 0; trigger holds; worker due/next slot, never 07:00. Live on dev: this window predicted |
 | 5 | `report` | On a built fixture set: price before/after `predicted_at`; close = last before kick-off; Pinnacle then avg; ET/pens void; gap filter; one CLV by hand; equals `find_bets` on the same frame |
+| 5a | Alerting: the worker runs `ingest check` after the 07:00 slot and notifies on a failed job (paper, ingest, predict), unmapped names > 0, near-duplicates > 0, or no new Odds API prices in 24 h. Channel: a Toft issue in BET-APP (decided 2026-11-13; other integrations later), so the worker needs a Toft API key as a secret the user sets | A forced failure of each kind notifies once; a clean run sends nothing; a notify failure is logged and does not fail the job |
 | 6 | Deploy; run after the November window | Settled n > 0 per model; CLV rows > 0 with gaps; `ingest check` and paper job unchanged |
+
+### 0a: rescheduled club games
+
+football-data's `fixtures.csv` keeps a game's old date after it is moved; its season files list the played date.
+Production `ingest check` (13 Nov) shows 3 pairs: Tenerife v Andorra 1→2 Nov (SP2), Nacional v Academico Viseu
+7→8 Nov (P1), Las Palmas v Eldense 8→9 Nov (SP2); fixture ids 97/1314, 98/1725, 100/1324 (low = ledger, high =
+football-data import). Everything keys on the exact date:
+- `model.paper.settle` merges on `KEY` (date, league, home, away): the ledger row never settles and drops out after
+  `GIVE_UP` (30 days), silently shrinking the sample.
+- `ingest.jobs.import_footballdata` matches on (competition, date, teams): the played game becomes a second fixture,
+  so one game would be counted twice by any model trained on `fixtures` once both carry a score.
+- `model.paper.log` dedups on `KEY`: if `fixtures.csv` moves the date before kick-off, the game is logged and can be
+  bet a second time.
+Fix direction (plan before code; editing `model/paper.py` is fine, the user has Michalis's OK): the same teams in the same league within a day are
+one game (ingest's `NEAR` rule) in settle, log and the football-data import; a one-off cleanup of the 3 duplicate
+fixtures (their football-data prices move to the ledger fixture). Open: which date the kept fixture shows (ledger
+key vs played date) given the `v_ledger_*` projection and `sync check` compare on date.
 
 ## Tradeoffs
 
