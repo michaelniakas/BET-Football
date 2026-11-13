@@ -501,3 +501,107 @@ def test_footballdata_run_order_budget_and_resume(conn: psycopg.Connection, pg_u
     assert run("E0", str(now - 1)) == 0 and fetched == [fd.main_url("E0", now - 1)]
     with pytest.raises(SystemExit, match="unknown football-data code"):
         run("E0")
+
+
+def _predicted_fixtures(conn: psycopg.Connection, games: list[tuple[str, str, str, bool]]) -> None:
+    """(home, away, date, predicted) in E0, as the ledgers' projection stores them."""
+    jobs.seed(conn, [{"source": "espn", "league": "E0", "source_name": n, "fd_name": n}
+                     for n in {n for g in games for n in g[:2]}])
+    conn.execute("INSERT INTO competitions (code) VALUES ('E0') ON CONFLICT DO NOTHING")
+    conn.execute("INSERT INTO models (name, version) VALUES ('michalis', 'v') ON CONFLICT DO NOTHING")
+    for home, away, date, predicted in games:
+        fid = conn.execute("""
+            INSERT INTO fixtures (competition_id, season, date, home_id, away_id)
+            SELECT c.id, 2025, %s, h.team_id, a.team_id FROM competitions c
+            JOIN team_aliases h ON (h.source, h.name) = ('football-data', %s)
+            JOIN team_aliases a ON (a.source, a.name) = ('football-data', %s) WHERE c.code = 'E0'
+            RETURNING id""", (date, home, away)).fetchone()[0]
+        if predicted:
+            conn.execute("""INSERT INTO predictions (model_id, fixture_id, fixture_date, market, line, predicted_at, p)
+                            SELECT m.id, %s, %s, '1x2', NULL, %s::date - 1, ARRAY[.5, .3, .2] FROM models m""",
+                         (fid, date, date))
+
+
+def test_footballdata_finds_a_predicted_game_played_a_day_later(conn: psycopg.Connection):
+    """fixtures.csv kept the old date, so the ledger's fixture is a day before the date football-data plays it on."""
+    import datetime as dt
+
+    from ingest.footballdata import Price
+    _predicted_fixtures(conn, [("Man City", "Arsenal", "2025-11-22", True),
+                               ("Chelsea", "Arsenal", "2025-11-22", True), ("Chelsea", "Arsenal", "2025-11-23", False)])
+    kickoff = dt.datetime(2025, 11, 23, 15, 0, tzinfo=dt.UTC)
+    one = Price("1x2", None, "b365", "pre_match", (1.8, 3.6, 4.5))
+    report = jobs.import_footballdata(conn, [fd_game("E0", "2025-11-23", "Man City", "Arsenal", 2, 1, kickoff, [one]),
+                                             fd_game("E0", "2025-11-23", "Chelsea", "Arsenal", 0, 0, kickoff, [one])])
+    assert (report["inserted"], report["filled"], report["prices"]) == (0, 1, 2)
+    # The predicted fixture keeps the ledger's date and its score (the ledger sets it); the kick-off fills.
+    assert fixture(conn, "Man City") == [("2025-11-22", kickoff, None, None, None)]
+    # The exact date wins over a fixture a day off.
+    assert fixture(conn, "Chelsea") == [("2025-11-22", None, None, None, None), ("2025-11-23", kickoff, 0, 0, None)]
+    assert conn.execute("SELECT f.date::text FROM odds_snapshots o JOIN fixtures f ON f.id = o.fixture_id"
+                        " ORDER BY 1").fetchall() == [("2025-11-22",), ("2025-11-23",)]
+
+
+def test_dedupe_folds_a_near_duplicate_into_the_predicted_fixture(conn: psycopg.Connection):
+    import datetime as dt
+
+    from ingest.footballdata import Price
+    _predicted_fixtures(conn, [("Man City", "Arsenal", "2025-11-22", True), ("Man City", "Arsenal", "2025-11-23", False),
+                               ("Chelsea", "Arsenal", "2025-11-22", False), ("Chelsea", "Arsenal", "2025-11-23", False)])
+    conn.execute("""
+        INSERT INTO odds_snapshots (fixture_id, market, line, source, bookmaker, kind, captured_at, prices)
+        SELECT f, '1x2', NULL, 'football-data', b, 'pre_match', NULL, ARRAY[2.0, 3.0, p]
+        FROM (VALUES (1, 'ps', 5.0), (2, 'ps', 9.0), (2, 'b365', 6.0)) v(f, b, p);
+        INSERT INTO market_probs (fixture_id, market, line, kind, method, captured_at, p)
+        VALUES (2, '1x2', NULL, 'closing', 'model.paper', NULL, ARRAY[.5, .3, .2]);
+        INSERT INTO fixture_refs (source, ref, fixture_id) VALUES ('espn', '7', 2);
+        UPDATE fixtures SET kickoff = '2025-11-23T15:00Z' WHERE id = 2""")
+
+    assert jobs.dedupe(conn) == {"merged": 1, "left": 1}
+    assert fixture(conn, "Man City") == [("2025-11-22", dt.datetime(2025, 11, 23, 15, 0, tzinfo=dt.UTC),
+                                          None, None, None)]
+    # The predicted fixture's own price stays; the duplicate's other prices, probabilities and refs move to it.
+    assert conn.execute("SELECT bookmaker, prices[3] FROM odds_snapshots ORDER BY 1").fetchall() == \
+        [("b365", 6.0), ("ps", 5.0)]
+    assert conn.execute("SELECT fixture_id FROM market_probs UNION ALL SELECT fixture_id FROM fixture_refs"
+                        ).fetchall() == [(1,), (1,)]
+    assert len(fixture(conn, "Chelsea")) == 2           # neither predicted: reported, left alone
+    assert jobs.dedupe(conn) == {"merged": 0, "left": 1}
+    jobs.import_footballdata(conn, [fd_game("E0", "2025-11-23", "Man City", "Arsenal", 2, 1, prices=[
+        Price("1x2", None, "b365", "pre_match", (1.8, 3.6, 4.5))])])
+    assert len(fixture(conn, "Man City")) == 1
+
+
+def test_a_kickoff_two_days_off_is_left_out_not_fatal(conn: psycopg.Connection):
+    """00:30 BST is 23:30 UTC the day before: a day-off fixture would be two days from it (fixtures_kickoff_on_date)."""
+    import datetime as dt
+    late = dt.datetime(2025, 8, 15, 23, 30, tzinfo=dt.UTC)
+    _predicted_fixtures(conn, [("Man City", "Arsenal", "2025-08-17", True),
+                               ("Chelsea", "Arsenal", "2025-08-17", True), ("Chelsea", "Arsenal", "2025-08-16", False)])
+    conn.execute("UPDATE fixtures SET kickoff = %s WHERE id = 3", (late,))
+    report = jobs.import_footballdata(conn, [fd_game("E0", "2025-08-16", "Man City", "Arsenal", 1, 0, late)])
+    assert report["inserted"] == 0 and fixture(conn, "Man City") == [("2025-08-17", None, None, None, None)]
+    assert jobs.dedupe(conn)["merged"] == 1 and fixture(conn, "Chelsea") == [("2025-08-17", None, None, None, None)]
+
+
+def test_footballdata_moves_an_unpredicted_game_to_the_day_it_was_played(conn: psycopg.Connection):
+    """ESPN missed the move (or football-data corrected its date): its played date wins, kick-off with it."""
+    import datetime as dt
+    _predicted_fixtures(conn, [("Man City", "Arsenal", "2025-11-22", False)])
+    conn.execute("UPDATE fixtures SET kickoff = '2025-11-22T15:00Z', hg = 2, ag = 1")
+    kickoff = dt.datetime(2025, 11, 23, 15, 0, tzinfo=dt.UTC)
+    report = jobs.import_footballdata(conn, [fd_game("E0", "2025-11-23", "Man City", "Arsenal", 2, 1, kickoff)])
+    assert report["inserted"] == 0 and fixture(conn, "Man City") == [("2025-11-23", kickoff, 2, 1, None)]
+
+
+def test_dedupe_takes_one_ref_per_source_and_leaves_a_duplicate_two_fixtures_claim(conn: psycopg.Connection):
+    _predicted_fixtures(conn, [("Man City", "Arsenal", "2025-11-21", False), ("Man City", "Arsenal", "2025-11-22", True),
+                               ("Man City", "Arsenal", "2025-11-23", False), ("Chelsea", "Arsenal", "2025-11-21", True),
+                               ("Chelsea", "Arsenal", "2025-11-22", False), ("Chelsea", "Arsenal", "2025-11-23", True)])
+    conn.execute("""INSERT INTO fixture_refs (source, ref, fixture_id) VALUES ('espn', 'a', 1), ('espn', 'b', 3);
+                    INSERT INTO odds_snapshots (fixture_id, market, line, source, bookmaker, kind, captured_at, prices)
+                    VALUES (5, '1x2', NULL, 'football-data', 'ps', 'pre_match', NULL, ARRAY[2.0, 3.0, 4.0])""")
+    assert jobs.dedupe(conn) == {"merged": 2, "left": 2}
+    assert conn.execute("SELECT fixture_id FROM fixture_refs").fetchall() == [(2,)]
+    assert len(fixture(conn, "Chelsea")) == 3                                   # whose game is it? a human decides
+    assert conn.execute("SELECT fixture_id FROM odds_snapshots").fetchall() == [(5,)]

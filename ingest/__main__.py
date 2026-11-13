@@ -6,6 +6,7 @@
     python -m ingest football-data [CODE [SEASON]]  # club results + 1X2/O-U 2.5 prices: this season, the extra
                                                # leagues, then missing seasons since 2000/01 (10-minute budget)
     python -m ingest merge NAME KEEP           # two football-data spellings of one club: NAME's team joins KEEP's
+    python -m ingest dedupe                    # a club game moved by a day, stored twice: folded into the predicted one
     python -m ingest seed research/teams.csv   # the pilot's ESPN -> football-data club names, as aliases
     python -m ingest unmapped                  # names a job could not map; their fixtures were skipped
     python -m ingest alias SOURCE NAME TEAM    # confirm one: TEAM is a team id or another spelling of it
@@ -33,7 +34,7 @@ from model.data import current_season_start
 from . import espn, footballdata, jobs, martj42, names, oddsapi, store
 
 ARGS = {"martj42": [0], "espn": [0, 2], "odds": [0], "seed": [1], "unmapped": [0], "alias": [3], "check": [0],
-        "football-data": [0, 1, 2], "merge": [2]}
+        "football-data": [0, 1, 2], "merge": [2], "dedupe": [0]}
 WINDOW = (-2, 7)        # days around today: results of the last two days, fixtures of the next week
 PAUSE = 0.5             # seconds between ESPN requests (~330 a run)
 HORIZON = dt.timedelta(hours=72)
@@ -134,6 +135,11 @@ def main() -> int:
                 raise SystemExit(str(e)) from None
             print(f"football-data:{args[0]!r} -> team {team} ({args[1]!r})")
             return 0
+        if cmd == "dedupe":
+            report = jobs.dedupe(conn)
+            print(f"{report['merged']} duplicates folded into their predicted fixture,"
+                  f" {report['left']} near pairs left (neither or both predicted)")
+            return 1 if report["left"] else 0
         if cmd == "seed":
             with Path(args[0]).open(newline="") as fh:
                 report = jobs.seed(conn, list(csv.DictReader(fh)))
